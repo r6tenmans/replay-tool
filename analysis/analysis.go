@@ -9,6 +9,13 @@ import (
 // players provides header-parsed player info (username, operator, team).
 // Returns the complete round analysis.
 func AnalyzeRound(data []byte, players []PlayerInfo) *RoundAnalysis {
+	// Use empty mapping - will fall back to position-based inference
+	return AnalyzeRoundWithMapping(data, players, nil)
+}
+
+// AnalyzeRoundWithMapping runs the full analysis pipeline with a pre-built
+// entity-to-player mapping from the dissect library.
+func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer map[uint32]int) *RoundAnalysis {
 	if len(data) < 1000 {
 		return &RoundAnalysis{RecordingPlayer: -1}
 	}
@@ -30,7 +37,79 @@ func AnalyzeRound(data []byte, players []PlayerInfo) *RoundAnalysis {
 	ExtractBoneData(data, allTracks)
 
 	// Step 5: Map entities to players
-	entityToPlayer := MapEntitiesToPlayers(data, len(players))
+	if entityToPlayer == nil || len(entityToPlayer) == 0 {
+		// No mapping provided, try binary pattern method
+		entityToPlayer = MapEntitiesToPlayers(data, len(players))
+		if len(entityToPlayer) < len(players)/2 {
+			// Fallback: use extracted tracks to infer mapping
+			entityToPlayer = MapEntitiesToPlayersFromTracks(allTracks, players)
+		}
+	}
+
+	// Step 6: Camera frames (Pass 4 — per-entity detection)
+	ExtractCameraFrames(data, allTracks)
+
+	// Step 7: Infer stance from Z-height
+	InferStance(allTracks)
+
+	// Step 8: Classify entities (gadgets, drones, barricades, weapons, projectiles)
+	spawnCounters := ExtractSpawnCounters(data)
+	ClassifyEntities(allTracks, spawnCounters, data, players)
+
+	// Step 9: Split into player tracks and entity tracks
+	result.Players, result.Entities = SplitTracks(allTracks, entityToPlayer, players)
+
+	// Step 10: Detect recording player
+	result.RecordingPlayer = DetectRecordingPlayer(allTracks, entityToPlayer)
+
+	// Step 11: Ammo events + weapon tracking
+	ammoEvents := ExtractAmmoEvents(data)
+	AssignAmmoTimes(ammoEvents, result.TimerTicks, result.RoundDuration)
+	result.Weapons = BuildWeaponTracking(data, ammoEvents, players, entityToPlayer)
+
+	// Step 12: Equipment loadouts (weapon/gadget names)
+	result.Loadouts = ExtractLoadouts(data, players)
+
+	// Step 13: Shot event reconstruction
+	result.Shots = ReconstructShots(ammoEvents, result.Players, entityToPlayer)
+
+	// Step 14: Health updates
+	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
+
+	// Step 15: Binary match feedback (kills/deaths/DBNOs)
+	result.BinaryFeedback = ExtractBinaryFeedback(data)
+
+	// Step 16: Game actions (reinforce, gadget deploy)
+	result.GameActions = ExtractGameActions(data, result.TimerTicks)
+
+	return result
+}
+
+// AnalyzeRoundWithLibraryPositions runs the analysis using position data from the
+// dissect library instead of binary extraction. This is the preferred method for
+// newer replay formats where binary patterns have changed.
+func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positions []LibraryPosition, entityToPlayer map[uint32]int) *RoundAnalysis {
+	if len(data) < 1000 {
+		return &RoundAnalysis{RecordingPlayer: -1}
+	}
+
+	result := &RoundAnalysis{RecordingPlayer: -1}
+
+	// Step 1: Extract timer ticks (needed for time assignment)
+	result.TimerTicks = ExtractTimerTicks(data)
+	result.TimerPhases = BuildTimerPhases(result.TimerTicks)
+	result.RoundDuration = RoundDurationFromTicks(result.TimerTicks)
+
+	// Step 2: Build tracks from library positions (NOT binary extraction)
+	allTracks := BuildTracksFromLibraryPositions(positions)
+
+	// Step 3: Assign timestamps to frames
+	AssignFrameTimes(allTracks, result.TimerTicks, result.RoundDuration)
+
+	// Step 4: Extract bone data (head + chest aim quaternions) - still from binary
+	ExtractBoneData(data, allTracks)
+
+	// Step 5: Entity-to-player mapping is already provided
 
 	// Step 6: Camera frames (Pass 4 — per-entity detection)
 	ExtractCameraFrames(data, allTracks)

@@ -235,3 +235,14 @@ type GameEvent struct {
 	Text     string  `json:"text"`
 	Headshot bool    `json:"headshot,omitempty"`
 }
+
+// LibraryPosition represents a position update from the dissect library.
+// Used to pass pre-parsed position data instead of doing binary extraction.
+type LibraryPosition struct {
+	EntityRef   uint32
+	PlayerIndex int // -1 for non-player entities
+	X, Y, Z     float32
+	Yaw         float32 // degrees
+	Pitch       float32 // degrees, positive = looking up
+	IsDroneView bool
+}

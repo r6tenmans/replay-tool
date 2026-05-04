@@ -214,7 +214,31 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				IsAttack:  p.IsAttack,
 			}
 		}
-		output.Analysis = analysis.AnalyzeRound(rawData, players)
+
+		// Extract entity->player mapping from dissect library's PositionUpdates
+		entityToPlayer := make(map[uint32]int)
+		for _, pu := range reader.PositionUpdates {
+			if pu.PlayerIndex >= 0 && pu.PlayerIndex < len(players) {
+				entityToPlayer[pu.EntityRef] = pu.PlayerIndex
+			}
+		}
+
+		// Convert dissect library positions to analysis format
+		libPositions := make([]analysis.LibraryPosition, len(reader.PositionUpdates))
+		for i, pu := range reader.PositionUpdates {
+			libPositions[i] = analysis.LibraryPosition{
+				EntityRef:   pu.EntityRef,
+				PlayerIndex: pu.PlayerIndex,
+				X:           pu.X,
+				Y:           pu.Y,
+				Z:           pu.Z,
+				Yaw:         pu.Yaw,
+				Pitch:       pu.Pitch,
+				IsDroneView: pu.IsDroneView,
+			}
+		}
+
+		output.Analysis = analysis.AnalyzeRoundWithLibraryPositions(rawData, players, libPositions, entityToPlayer)
 	}
 
 	return output

@@ -145,16 +145,32 @@ func ExtractEntityPositions(data []byte) []*internalTrack {
 	return result
 }
 
-// MapEntitiesToPlayers maps entity refs to player indices using the SPAWN
-// counter=494 mapping records in the binary.
+// MapEntitiesToPlayers maps entity refs to player indices.
 //
-// Pattern: entity ID at known offsets relative to SPAWN records where
-// the counter field (u16 at +8 from archetype 0xFE857361) equals 494.
+// It first tries the legacy method (SPAWN archetype with counter=494).
+// If that fails (e.g., Y11S1+), it falls back to position-based inference:
+// - Extract top N entities by position count (N = player count)
+// - Group by spawn location (Y < 25 = defenders, Y > 35 = attackers)
+// - Match to players by team
 func MapEntitiesToPlayers(data []byte, numPlayers int) map[uint32]int {
 	result := make(map[uint32]int)
 	if numPlayers == 0 || len(data) < 100 {
 		return result
 	}
+
+	// Try legacy counter=494 method first
+	result = mapEntitiesLegacy(data, numPlayers)
+	if len(result) >= numPlayers/2 {
+		return result // Legacy method worked
+	}
+
+	// Fallback: use position-based inference
+	return mapEntitiesByPosition(data, numPlayers)
+}
+
+// mapEntitiesLegacy uses the SPAWN counter=494 pattern (pre-Y11S1)
+func mapEntitiesLegacy(data []byte, numPlayers int) map[uint32]int {
+	result := make(map[uint32]int)
 
 	// Scan for SPAWN archetype 0xFE857361 with counter=494 at +8
 	type spawnHit struct {
@@ -201,6 +217,195 @@ func MapEntitiesToPlayers(data []byte, numPlayers int) map[uint32]int {
 			break
 		}
 		result[h.entityRef] = idx
+	}
+
+	return result
+}
+
+// mapEntitiesByPosition infers player entities from position data.
+// It finds the top N entities by position count (likely players),
+// then assigns them to player indices based on spawn location.
+func mapEntitiesByPosition(data []byte, numPlayers int) map[uint32]int {
+	result := make(map[uint32]int)
+
+	// Quick scan for positions using SPAWN pattern 0xFE857360
+	type entityPos struct {
+		ref    uint32
+		count  int
+		firstY float32
+	}
+	entities := make(map[uint32]*entityPos)
+
+	pat := []byte{0x60, 0x73, 0x85, 0xFE}
+
+	for i := 16; i+18 < len(data); i++ {
+		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
+			continue
+		}
+
+		// Check for position bit
+		if data[i+4]&0x80 == 0 {
+			continue
+		}
+
+		// Entity ref at -16
+		if i < 16 {
+			continue
+		}
+		entityRef := binary.LittleEndian.Uint32(data[i-16 : i-12])
+		if entityRef>>24 != 0xF0 {
+			continue
+		}
+
+		// Y coordinate at +10 (after XYZ at +6)
+		y := math.Float32frombits(binary.LittleEndian.Uint32(data[i+10 : i+14]))
+
+		if e, ok := entities[entityRef]; ok {
+			e.count++
+		} else {
+			entities[entityRef] = &entityPos{ref: entityRef, count: 1, firstY: y}
+		}
+	}
+
+	// Sort by position count (top N are likely players)
+	type kv struct {
+		ref    uint32
+		count  int
+		firstY float32
+	}
+	var sorted []kv
+	for _, e := range entities {
+		sorted = append(sorted, kv{e.ref, e.count, e.firstY})
+	}
+	// Sort descending by count
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].count > sorted[i].count {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+
+	// Take top N candidates (where N = numPlayers)
+	candidates := sorted
+	if len(candidates) > numPlayers {
+		candidates = candidates[:numPlayers]
+	}
+
+	// Split by spawn location: Y < 25 = defenders (team 4/0), Y > 35 = attackers (team 3/1)
+	var defRefs, atkRefs []uint32
+	for _, c := range candidates {
+		if c.firstY < 25 {
+			defRefs = append(defRefs, c.ref)
+		} else {
+			atkRefs = append(atkRefs, c.ref)
+		}
+	}
+
+	// Assign defenders to indices 0..4, attackers to 5..9
+	// (Standard R6 format: first 5 players are defenders)
+	defCount := numPlayers / 2
+	for i, ref := range defRefs {
+		if i >= defCount {
+			break
+		}
+		result[ref] = i
+	}
+	for i, ref := range atkRefs {
+		idx := defCount + i
+		if idx >= numPlayers {
+			break
+		}
+		result[ref] = idx
+	}
+
+	return result
+}
+
+// MapEntitiesToPlayersFromTracks uses pre-extracted position tracks to infer
+// player entity mappings. This is used when the legacy binary pattern method fails.
+func MapEntitiesToPlayersFromTracks(tracks []*internalTrack, players []PlayerInfo) map[uint32]int {
+	result := make(map[uint32]int)
+	if len(tracks) == 0 || len(players) == 0 {
+		return result
+	}
+
+	// Collect entities with 0xF0 prefix and significant position data
+	type entityInfo struct {
+		id     uint32
+		count  int
+		firstY float32
+	}
+	var candidates []entityInfo
+
+	for _, tr := range tracks {
+		if tr.EntityID>>24 != 0xF0 {
+			continue
+		}
+		if len(tr.Frames) < 50 { // Need significant movement to be a player
+			continue
+		}
+		firstY := float32(0)
+		if len(tr.Frames) > 0 {
+			firstY = tr.Frames[0].Y
+		}
+		candidates = append(candidates, entityInfo{
+			id:     tr.EntityID,
+			count:  len(tr.Frames),
+			firstY: firstY,
+		})
+	}
+
+	// Sort by frame count descending (players have most position updates)
+	for i := 0; i < len(candidates)-1; i++ {
+		for j := i + 1; j < len(candidates); j++ {
+			if candidates[j].count > candidates[i].count {
+				candidates[i], candidates[j] = candidates[j], candidates[i]
+			}
+		}
+	}
+
+	// Take top N (N = player count)
+	if len(candidates) > len(players) {
+		candidates = candidates[:len(players)]
+	}
+
+	// Group by spawn position: Y < 25 = defenders, Y > 35 = attackers
+	var defRefs, atkRefs []uint32
+	for _, c := range candidates {
+		if c.firstY < 25 {
+			defRefs = append(defRefs, c.id)
+		} else {
+			atkRefs = append(atkRefs, c.id)
+		}
+	}
+
+	// Count defenders and attackers in player list
+	defPlayerCount := 0
+	atkPlayerCount := 0
+	for _, p := range players {
+		if p.IsAttack {
+			atkPlayerCount++
+		} else {
+			defPlayerCount++
+		}
+	}
+
+	// Assign defenders to defender player indices, attackers to attacker indices
+	defIdx := 0
+	atkIdx := 0
+	for i, p := range players {
+		if p.IsAttack {
+			if atkIdx < len(atkRefs) {
+				result[atkRefs[atkIdx]] = i
+				atkIdx++
+			}
+		} else {
+			if defIdx < len(defRefs) {
+				result[defRefs[defIdx]] = i
+				defIdx++
+			}
+		}
 	}
 
 	return result
@@ -328,4 +533,44 @@ func sortFrames(frames []PosFrame) {
 
 func sortTracksByFrameCount(tracks []*internalTrack) {
 	// Sort by frame count descending (players first)
+}
+
+// BuildTracksFromLibraryPositions constructs internal tracks from position updates
+// provided by the dissect library. This is the preferred method as the library
+// correctly parses entity refs and player associations.
+func BuildTracksFromLibraryPositions(positions []LibraryPosition) []*internalTrack {
+	trackMap := make(map[uint32]*internalTrack)
+
+	for i, pos := range positions {
+		tr, exists := trackMap[pos.EntityRef]
+		if !exists {
+			tr = &internalTrack{
+				EntityID:  pos.EntityRef,
+				EntityHex: fmt.Sprintf("0x%08X", pos.EntityRef),
+				TeamIndex: -1,
+			}
+			trackMap[pos.EntityRef] = tr
+		}
+
+		frame := PosFrame{
+			Offset:   int64(i), // Use index as pseudo-offset
+			EntityID: pos.EntityRef,
+			X:        pos.X,
+			Y:        pos.Y,
+			Z:        pos.Z,
+			YawDeg:   pos.Yaw,
+			PitchDeg: pos.Pitch,
+			IsCamera: pos.IsDroneView,
+		}
+
+		tr.Frames = append(tr.Frames, frame)
+	}
+
+	// Convert to slice
+	var tracks []*internalTrack
+	for _, tr := range trackMap {
+		tracks = append(tracks, tr)
+	}
+
+	return tracks
 }
