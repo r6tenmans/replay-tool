@@ -117,11 +117,12 @@ type TeamInfo struct {
 }
 
 type PlayerInfoHeader struct {
-	Username  string `json:"username"`
-	Operator  string `json:"operator"`
-	TeamIndex int    `json:"teamIndex"`
-	IsAttack  bool   `json:"isAttack"`
-	Spawn     string `json:"spawn,omitempty"`
+	Username        string `json:"username"`
+	Operator        string `json:"operator"`
+	InitialOperator string `json:"initialOperator,omitempty"`
+	TeamIndex       int    `json:"teamIndex"`
+	IsAttack        bool   `json:"isAttack"`
+	Spawn           string `json:"spawn,omitempty"`
 }
 
 type FeedbackInfo struct {
@@ -172,13 +173,17 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 		if p.TeamIndex < len(reader.Header.Teams) {
 			isAttack = reader.Header.Teams[p.TeamIndex].Role == dissect.Attack
 		}
-		header.Players = append(header.Players, PlayerInfoHeader{
+		ph := PlayerInfoHeader{
 			Username:  p.Username,
 			Operator:  p.Operator.String(),
 			TeamIndex: p.TeamIndex,
 			IsAttack:  isAttack,
 			Spawn:     p.Spawn,
-		})
+		}
+		if p.InitialOperator != 0 {
+			ph.InitialOperator = p.InitialOperator.String()
+		}
+		header.Players = append(header.Players, ph)
 	}
 
 	// Match feedback
@@ -235,10 +240,81 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				Yaw:         pu.Yaw,
 				Pitch:       pu.Pitch,
 				IsDroneView: pu.IsDroneView,
+				BinOffset:   pu.BinOffset,
 			}
 		}
 
 		output.Analysis = analysis.AnalyzeRoundWithLibraryPositions(rawData, players, libPositions, entityToPlayer)
+
+		// Populate operator swaps from the library's already-resolved MatchFeedback.
+		// reconcileOperatorSwaps() (called inside reader.Read()) handles all season paths:
+		// Y10S4+: header RoleName vs readPlayer operator, pre-Y9S3: DissectID, Y9S3+: uiID.
+		usernameToIdx := make(map[string]int, len(header.Players))
+		for i, p := range header.Players {
+			usernameToIdx[p.Username] = i
+		}
+
+		// For Y10S4+ the library skips the binary event entirely so MatchFeedback has no
+		// timing. Cross-reference with the binary scanner results (which DO have timing
+		// via tick interpolation) using toOperator as the join key.
+		binarySwapTime := make(map[string]float32)
+		for _, bsw := range output.Analysis.OperatorSwaps {
+			if bsw.ToOperator != "" && bsw.TimeSecs > 0 {
+				binarySwapTime[bsw.ToOperator] = bsw.TimeSecs
+			}
+		}
+
+		var libSwaps []analysis.OperatorSwapEvent
+		for _, mf := range reader.MatchFeedback {
+			if mf.Type != dissect.OperatorSwap {
+				continue
+			}
+			pIdx, ok := usernameToIdx[mf.Username]
+			if !ok {
+				continue
+			}
+			from := ""
+			if pIdx < len(header.Players) && header.Players[pIdx].InitialOperator != "" {
+				from = header.Players[pIdx].InitialOperator
+			}
+			toName := mf.Operator.String()
+			t := float32(mf.TimeInSeconds)
+			if t == 0 {
+				if bt, ok := binarySwapTime[toName]; ok {
+					t = bt
+				}
+			}
+			libSwaps = append(libSwaps, analysis.OperatorSwapEvent{
+				PlayerIndex:  pIdx,
+				Username:     mf.Username,
+				FromOperator: from,
+				ToOperator:   toName,
+				TimeSecs:     t,
+			})
+		}
+		output.Analysis.OperatorSwaps = libSwaps
+
+		// Score delta events — already fully parsed by the library
+		for _, su := range reader.ScoreUpdates {
+			output.Analysis.ScoreUpdates = append(output.Analysis.ScoreUpdates, analysis.ScoreUpdateEvent{
+				PlayerIndex: su.PlayerIndex,
+				Username:    su.Username,
+				PrevScore:   su.PrevScore,
+				NewScore:    su.NewScore,
+				Delta:       su.Delta,
+				BinOffset:   su.BinOffset,
+			})
+		}
+
+		// Drone lifecycle events — connect/disconnect confirmed from packet data
+		for _, de := range reader.DroneEvents {
+			output.Analysis.DroneEvents = append(output.Analysis.DroneEvents, analysis.DroneEventEntry{
+				PlayerRef: de.PlayerRef,
+				DroneRef:  de.DroneRef,
+				Seq:       de.Seq,
+				Connect:   de.Connect,
+			})
+		}
 	}
 
 	return output

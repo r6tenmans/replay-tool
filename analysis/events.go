@@ -122,6 +122,44 @@ func ExtractBinaryFeedback(data []byte) []BinaryMatchEvent {
 	return events
 }
 
+// tickOffsetToElapsed converts a binary offset to elapsed seconds by interpolating
+// within the range spanned by timer ticks, which is more accurate than using the
+// full data length as the denominator.
+func tickOffsetToElapsed(offset int64, ticks []TimerTick, totalDuration float32) float64 {
+	if len(ticks) < 2 || totalDuration <= 0 {
+		return 0
+	}
+	first := ticks[0].Offset
+	last := ticks[len(ticks)-1].Offset
+	if last <= first {
+		return 0
+	}
+	// Binary search for the first tick at or after offset
+	lo, hi := 0, len(ticks)-1
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if ticks[mid].Offset < offset {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	// Clamp to tick range
+	if offset <= first {
+		return 0
+	}
+	if offset >= last {
+		return float64(totalDuration)
+	}
+	// Interpolate between surrounding ticks
+	t0 := ticks[lo-1]
+	t1 := ticks[lo]
+	segFrac := float64(offset-t0.Offset) / float64(t1.Offset-t0.Offset)
+	seg0 := float64(t0.Offset-first) / float64(last-first) * float64(totalDuration)
+	seg1 := float64(t1.Offset-first) / float64(last-first) * float64(totalDuration)
+	return seg0 + segFrac*(seg1-seg0)
+}
+
 // ExtractGameActions scans for reinforce and gadget deploy binary patterns.
 func ExtractGameActions(data []byte, ticks []TimerTick) []GameAction {
 	reinforcePat := []byte{0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x35}
@@ -141,12 +179,7 @@ func ExtractGameActions(data []byte, ticks []TimerTick) []GameAction {
 			continue
 		}
 
-		// Estimate time from binary offset fraction
-		timeSecs := float64(0)
-		if totalDuration > 0 {
-			frac := float64(i) / float64(len(data))
-			timeSecs = frac * float64(totalDuration)
-		}
+		timeSecs := tickOffsetToElapsed(int64(i), ticks, totalDuration)
 
 		// Dedup: skip if within 3 seconds of previous same-type action
 		dup := false
@@ -174,6 +207,49 @@ func ExtractGameActions(data []byte, ticks []TimerTick) []GameAction {
 	}
 
 	return actions
+}
+
+// ExtractPlayerInitOrder returns entity refs that appear with SPAWN counter=494
+// (the player-entity counter value) in the order they first appear in the binary.
+// This order matches the header player order and can be used as a mapping fallback.
+func ExtractPlayerInitOrder(data []byte) []uint32 {
+	pat := []byte{0x61, 0x73, 0x85, 0xFE}
+	seen := make(map[uint32]bool)
+	var order []uint32
+
+	for i := 16; i+10 < len(data); i++ {
+		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
+			continue
+		}
+		counter := uint16(data[i+8]) | uint16(data[i+9])<<8
+		if counter != 494 {
+			continue
+		}
+		entityRef := binary.LittleEndian.Uint32(data[i-12 : i-8])
+		if entityRef>>24 < 0xF0 {
+			continue
+		}
+		if !seen[entityRef] {
+			seen[entityRef] = true
+			order = append(order, entityRef)
+		}
+	}
+	return order
+}
+
+// MapPlayersFromInitBlocks builds an entity→playerIndex map using the init-block
+// appearance order of player entities (counter=494). Falls back gracefully when
+// fewer entities are found than expected.
+func MapPlayersFromInitBlocks(data []byte, numPlayers int) map[uint32]int {
+	order := ExtractPlayerInitOrder(data)
+	result := make(map[uint32]int)
+	for i, eid := range order {
+		if i >= numPlayers {
+			break
+		}
+		result[eid] = i
+	}
+	return result
 }
 
 // ExtractSpawnCounters reads entity SPAWN counter values.
@@ -373,4 +449,66 @@ func ExtractLoadouts(data []byte, players []PlayerInfo) []PlayerLoadout {
 	}
 
 	return loadouts
+}
+
+// ExtractOperatorSwaps scans for mid-round attacker operator swap events.
+//
+// Binary layout after pattern [22 A9 26 0B E4] (5 bytes already at i):
+//
+//	i+5      : skip byte (type indicator consumed by Uint64)
+//	i+6..13  : new operator uint64 LE
+//
+// Pre-Y9S3 path (used when data looks like pre-caster-view era):
+//
+//	i+14..18 : 5 skip bytes
+//	i+19..22 : DissectID [4]byte (player identifier)
+//
+// For Y10S4+ replays this function is a fallback — the library's reconcileOperatorSwaps
+// already emits OperatorSwap entries via reader.MatchFeedback which main.go prefers.
+// This scanner handles pre-library cases and deduces operator name from the game ID.
+func ExtractOperatorSwaps(data []byte, players []PlayerInfo, ticks []TimerTick) []OperatorSwapEvent {
+	pat := []byte{0x22, 0xA9, 0x26, 0x0B, 0xE4}
+	totalDuration := RoundDurationFromTicks(ticks)
+	var events []OperatorSwapEvent
+
+	for i := 0; i+25 <= len(data); i++ {
+		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] ||
+			data[i+3] != pat[3] || data[i+4] != pat[4] {
+			continue
+		}
+
+		// i+5: skip byte, i+6..i+13: operator uint64 LE
+		opID := binary.LittleEndian.Uint64(data[i+6 : i+14])
+		if opID == 0 {
+			continue
+		}
+		opName := resolveItemName(opID)
+
+		// i+14..i+18: 5 skip bytes, i+19..i+22: DissectID
+		dissectID := data[i+19 : i+23]
+		pIdx := -1
+		// Try to match DissectID to a player via operator cross-reference
+		// (full DissectID matching requires the dissect library; here we match by operator name)
+		for j, p := range players {
+			if p.Operator == opName {
+				pIdx = j
+				break
+			}
+		}
+
+		t := float32(tickOffsetToElapsed(int64(i), ticks, totalDuration))
+		ev := OperatorSwapEvent{
+			PlayerIndex: pIdx,
+			ToOperator:  opName,
+			Offset:      int64(i),
+			TimeSecs:    t,
+		}
+		// Attach DissectID as hex for debugging if player not matched
+		if pIdx < 0 {
+			ev.ToOperator = resolveItemName(opID)
+			_ = dissectID
+		}
+		events = append(events, ev)
+	}
+	return events
 }

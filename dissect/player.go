@@ -200,6 +200,7 @@ func readAtkOpSwap(r *Reader) error {
 		i := r.PlayerIndexByID(id)
 		log.Debug().Hex("id", id).Interface("op", op).Msg("atk_op_swap")
 		if i > -1 {
+			r.Header.Players[i].InitialOperator = r.Header.Players[i].Operator
 			r.Header.Players[i].Operator = o
 			u := MatchUpdate{
 				Type:          OperatorSwap,
@@ -224,6 +225,7 @@ func readAtkOpSwap(r *Reader) error {
 	}
 	for i, p := range r.Header.Players {
 		if p.uiID == id {
+			r.Header.Players[i].InitialOperator = p.Operator
 			r.Header.Players[i].Operator = o
 			u := MatchUpdate{
 				Type:          OperatorSwap,

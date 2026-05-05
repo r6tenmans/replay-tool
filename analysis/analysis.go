@@ -35,13 +35,18 @@ func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer m
 
 	// Step 4: Extract bone data (head + chest aim quaternions)
 	ExtractBoneData(data, allTracks)
+	ComputeHeadWorldAim(allTracks)
 
 	// Step 5: Map entities to players
 	if entityToPlayer == nil || len(entityToPlayer) == 0 {
-		// No mapping provided, try binary pattern method
+		// Try binary SPAWN counter=494 pattern method
 		entityToPlayer = MapEntitiesToPlayers(data, len(players))
 		if len(entityToPlayer) < len(players)/2 {
-			// Fallback: use extracted tracks to infer mapping
+			// Fallback: use init-block appearance order (61 73 85 FE, counter=494)
+			entityToPlayer = MapPlayersFromInitBlocks(data, len(players))
+		}
+		if len(entityToPlayer) < len(players)/2 {
+			// Final fallback: infer from position track proximity
 			entityToPlayer = MapEntitiesToPlayersFromTracks(allTracks, players)
 		}
 	}
@@ -71,7 +76,7 @@ func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer m
 	result.Loadouts = ExtractLoadouts(data, players)
 
 	// Step 13: Shot event reconstruction
-	result.Shots = ReconstructShots(ammoEvents, result.Players, entityToPlayer)
+	result.Shots = ReconstructShots(data, ammoEvents, result.Players, players)
 
 	// Step 14: Health updates
 	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
@@ -81,6 +86,9 @@ func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer m
 
 	// Step 16: Game actions (reinforce, gadget deploy)
 	result.GameActions = ExtractGameActions(data, result.TimerTicks)
+
+	// Step 17: Operator swap events (binary fallback for pre-Y10S4 replays)
+	result.OperatorSwaps = ExtractOperatorSwaps(data, players, result.TimerTicks)
 
 	return result
 }
@@ -108,6 +116,7 @@ func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positio
 
 	// Step 4: Extract bone data (head + chest aim quaternions) - still from binary
 	ExtractBoneData(data, allTracks)
+	ComputeHeadWorldAim(allTracks)
 
 	// Step 5: Entity-to-player mapping is already provided
 
@@ -136,7 +145,7 @@ func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positio
 	result.Loadouts = ExtractLoadouts(data, players)
 
 	// Step 13: Shot event reconstruction
-	result.Shots = ReconstructShots(ammoEvents, result.Players, entityToPlayer)
+	result.Shots = ReconstructShots(data, ammoEvents, result.Players, players)
 
 	// Step 14: Health updates
 	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
@@ -146,6 +155,9 @@ func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positio
 
 	// Step 16: Game actions (reinforce, gadget deploy)
 	result.GameActions = ExtractGameActions(data, result.TimerTicks)
+
+	// Step 17: Operator swap events (binary fallback for pre-Y10S4 replays)
+	result.OperatorSwaps = ExtractOperatorSwaps(data, players, result.TimerTicks)
 
 	return result
 }

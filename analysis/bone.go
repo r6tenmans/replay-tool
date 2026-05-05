@@ -209,6 +209,55 @@ func findNearestFrame(refs []boneFrameRef, targetOff int64, tracks []*internalTr
 	return best
 }
 
+// ComputeHeadWorldAim computes world-space head aim angles for every frame that
+// has both a head bone quaternion and a body orientation.
+//
+// head_world = body_quat × head_local_quat (Hamilton product, parent × child)
+//
+// For library-path frames where body quaternion fields are zero, the body
+// quaternion is reconstructed from YawDeg/PitchDeg using ZXY Euler convention.
+func ComputeHeadWorldAim(tracks []*internalTrack) {
+	for _, tr := range tracks {
+		for i := range tr.Frames {
+			f := &tr.Frames[i]
+			if !isUnitQuat(f.HeadQX, f.HeadQY, f.HeadQZ, f.HeadQW) {
+				continue
+			}
+			bx, by, bz, bw := f.Qx, f.Qy, f.Qz, f.Qw
+			if !isUnitQuat(bx, by, bz, bw) {
+				// Reconstruct body quaternion from yaw/pitch (ZXY intrinsic)
+				if f.YawDeg == 0 && f.PitchDeg == 0 {
+					continue
+				}
+				bx, by, bz, bw = quatFromYawPitch(f.YawDeg, f.PitchDeg)
+			}
+			// World-space head = body × head_local
+			hx, hy, hz, hw := multiplyQuat(bx, by, bz, bw, f.HeadQX, f.HeadQY, f.HeadQZ, f.HeadQW)
+			f.HeadAimYaw = calcYawFull(hx, hy, hz, hw)
+			f.HeadAimPitch = calcPitch(hx, hy, hz, hw)
+		}
+	}
+}
+
+// quatFromYawPitch builds a quaternion for ZXY Euler rotation (yaw around Z,
+// then pitch around X) — matching the convention used by calcYawFull/calcPitch.
+func quatFromYawPitch(yawDeg, pitchDeg float32) (x, y, z, w float32) {
+	yaw := float64(yawDeg) * math.Pi / 180
+	pitch := float64(pitchDeg) * math.Pi / 180
+	sy, cy := math.Sin(yaw/2), math.Cos(yaw/2)
+	sp, cp := math.Sin(pitch/2), math.Cos(pitch/2)
+	// q = q_z(yaw) × q_x(pitch)
+	return float32(cy * sp), float32(sy * sp), float32(sy * cp), float32(cy * cp)
+}
+
+// multiplyQuat returns the Hamilton product a × b.
+func multiplyQuat(ax, ay, az, aw, bx, by, bz, bw float32) (float32, float32, float32, float32) {
+	return aw*bx + ax*bw + ay*bz - az*by,
+		aw*by - ax*bz + ay*bw + az*bx,
+		aw*bz + ax*by - ay*bx + az*bw,
+		aw*bw - ax*bx - ay*by - az*bz
+}
+
 func absF(x float32) float32 {
 	if x < 0 {
 		return -x

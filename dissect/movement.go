@@ -35,8 +35,8 @@ type PositionUpdate struct {
 	Stance      string  `json:"stance,omitempty"`      // "standing", "crouching", "prone" (inferred from Z-height)
 	IsDroneView bool    `json:"isDroneView,omitempty"` // true if player is viewing through a drone
 	Seq         int     `json:"seq"`                   // sequence number within this round's position stream
+	BinOffset   int     `json:"binOffset,omitempty"`   // byte offset in decompressed stream (for temporal matching)
 	typeCode    uint16  // internal: FC-UPDATE type/flag field
-	binOffset   int     // internal: binary offset for temporal matching
 }
 
 // ScoreUpdate records a change in a player's cumulative score.
@@ -109,7 +109,7 @@ func (r *Reader) Float32() (float32, error) {
 	return math.Float32frombits(bits), nil
 }
 
-// droneEvent records a confirmed state transition detected from packet data.
+// DroneEvent records a confirmed state transition detected from packet data.
 // Connect: player's non-position packet type has bit 3 set (0x08) in byte[0]
 //
 //	AND the tail contains 04 FF <len> <droneRef> <0000>.
@@ -117,11 +117,11 @@ func (r *Reader) Float32() (float32, error) {
 // Disconnect: player's next non-position packet loses the 04 FF marker
 //
 //	(bit 3 cleared, or different/no drone ref in tail).
-type droneEvent struct {
-	playerRef uint32 // player entity ref
-	droneRef  uint32 // drone entity ref
-	seq       int    // position stream sequence number
-	connect   bool   // true = connect (player entered drone), false = disconnect
+type DroneEvent struct {
+	PlayerRef uint32 `json:"playerRef"` // player entity ref
+	DroneRef  uint32 `json:"droneRef"`  // drone entity ref
+	Seq       int    `json:"seq"`       // position stream sequence number
+	Connect   bool   `json:"connect"`   // true = connect (player entered drone), false = disconnect
 }
 
 // readMovement parses position data from the movement pattern (60 73 85 FE).
@@ -231,9 +231,9 @@ func readMovement(r *Reader) error {
 		X:           x,
 		Y:           y,
 		Z:           z,
-		Seq:         len(r.PositionUpdates),
-		typeCode:    typeCode,
-		binOffset:   startOffset,
+		Seq:       len(r.PositionUpdates),
+		BinOffset: startOffset,
+		typeCode:  typeCode,
 	}
 
 	// Check if this entity has a recent drone-view marker (0x0880)
@@ -359,30 +359,30 @@ func (r *Reader) scanDroneOperatorTail(startOffset int, typeBytes []byte) {
 	if foundDrone != 0 && foundDrone != prevDrone {
 		// Disconnect from previous drone if switching
 		if prevDrone != 0 {
-			r.droneEvents = append(r.droneEvents, droneEvent{
-				playerRef: entityRef,
-				droneRef:  prevDrone,
-				seq:       seq,
-				connect:   false,
+			r.DroneEvents = append(r.DroneEvents, DroneEvent{
+				PlayerRef: entityRef,
+				DroneRef:  prevDrone,
+				Seq:       seq,
+				Connect:   false,
 			})
 			log.Debug().Uint32("playerRef", entityRef).Uint32("droneRef", prevDrone).Int("seq", seq).Msg("drone_disconnect")
 		}
 		// Connect to new drone
-		r.droneEvents = append(r.droneEvents, droneEvent{
-			playerRef: entityRef,
-			droneRef:  foundDrone,
-			seq:       seq,
-			connect:   true,
+		r.DroneEvents = append(r.DroneEvents, DroneEvent{
+			PlayerRef: entityRef,
+			DroneRef:  foundDrone,
+			Seq:       seq,
+			Connect:   true,
 		})
 		r.playerDroneState[entityRef] = foundDrone
 		log.Debug().Uint32("playerRef", entityRef).Uint32("droneRef", foundDrone).Int("seq", seq).Msg("drone_connect")
 	} else if foundDrone == 0 && prevDrone != 0 {
 		// Was viewing, now not viewing → disconnect
-		r.droneEvents = append(r.droneEvents, droneEvent{
-			playerRef: entityRef,
-			droneRef:  prevDrone,
-			seq:       seq,
-			connect:   false,
+		r.DroneEvents = append(r.DroneEvents, DroneEvent{
+			PlayerRef: entityRef,
+			DroneRef:  prevDrone,
+			Seq:       seq,
+			Connect:   false,
 		})
 		r.playerDroneState[entityRef] = 0
 		log.Debug().Uint32("playerRef", entityRef).Uint32("droneRef", prevDrone).Int("seq", seq).Msg("drone_disconnect")
@@ -1518,20 +1518,20 @@ func (r *Reader) buildTrackedEntities(entityToPlayer map[uint32]int) {
 		activeConnect := make(map[pairKey]int) // seq when current connection started
 		totalTime := make(map[pairKey]int)     // cumulative connected seq-duration
 
-		for _, ev := range r.droneEvents {
-			key := pairKey{ev.playerRef, ev.droneRef}
-			ci, ok := refToCandidate[ev.droneRef]
+		for _, ev := range r.DroneEvents {
+			key := pairKey{ev.PlayerRef, ev.DroneRef}
+			ci, ok := refToCandidate[ev.DroneRef]
 			if !ok {
 				continue
 			}
 			if candidates[ci].OwnerIndex >= 0 {
 				continue // already owned (operator gadget from Phase 2)
 			}
-			if ev.connect {
-				activeConnect[key] = ev.seq
+			if ev.Connect {
+				activeConnect[key] = ev.Seq
 			} else {
 				if start, ok := activeConnect[key]; ok {
-					totalTime[key] += ev.seq - start
+					totalTime[key] += ev.Seq - start
 					delete(activeConnect, key)
 				}
 			}
@@ -1760,12 +1760,12 @@ func (r *Reader) buildTrackedEntities(entityToPlayer map[uint32]int) {
 			seq       int
 		}
 		droneLastConn := make(map[uint32]lastConn)
-		for _, ev := range r.droneEvents {
-			if !ev.connect {
+		for _, ev := range r.DroneEvents {
+			if !ev.Connect {
 				continue
 			}
-			if prev, ok := droneLastConn[ev.droneRef]; !ok || ev.seq > prev.seq {
-				droneLastConn[ev.droneRef] = lastConn{ev.playerRef, ev.seq}
+			if prev, ok := droneLastConn[ev.DroneRef]; !ok || ev.Seq > prev.seq {
+				droneLastConn[ev.DroneRef] = lastConn{ev.PlayerRef, ev.Seq}
 			}
 		}
 
@@ -1998,7 +1998,7 @@ func (r *Reader) buildShotEvents(entityToPlayer map[uint32]int) {
 		playerPositions[pu.PlayerIndex] = append(playerPositions[pu.PlayerIndex], playerPos{
 			x: pu.X, y: pu.Y, z: pu.Z, yaw: pu.Yaw, pitch: pu.Pitch,
 			hqX: pu.HeadQX, hqY: pu.HeadQY, hqZ: pu.HeadQZ, hqW: pu.HeadQW,
-			binOffset: pu.binOffset, seq: pu.Seq,
+			binOffset: pu.BinOffset, seq: pu.Seq,
 		})
 	}
 

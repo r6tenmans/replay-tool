@@ -168,55 +168,62 @@ func MapEntitiesToPlayers(data []byte, numPlayers int) map[uint32]int {
 	return mapEntitiesByPosition(data, numPlayers)
 }
 
-// mapEntitiesLegacy uses the SPAWN counter=494 pattern (pre-Y11S1)
+// mapEntitiesLegacy uses the SPAWN counter=494 pattern to map entity refs to players.
+// Tries multiple entity ref offsets to handle packet layout changes across seasons.
 func mapEntitiesLegacy(data []byte, numPlayers int) map[uint32]int {
 	result := make(map[uint32]int)
 
-	// Scan for SPAWN archetype 0xFE857361 with counter=494 at +8
 	type spawnHit struct {
 		offset    int
 		entityRef uint32
 	}
-	var hits []spawnHit
 
-	pat := []byte{0x61, 0x73, 0x85, 0xFE} // 0xFE857361 LE
+	pat := []byte{0x61, 0x73, 0x85, 0xFE} // SPAWN archetype 0xFE857361 LE
 
-	for i := 16; i+12 < len(data); i++ {
-		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
-			continue
-		}
-		// Counter at +8 (u16 LE)
-		if i+10 > len(data) {
-			continue
-		}
-		counter := uint16(data[i+8]) | uint16(data[i+9])<<8
-		if counter != 494 {
-			continue
-		}
-		// Entity ref at -12 from pattern
-		entityRef := binary.LittleEndian.Uint32(data[i-12 : i-8])
-		if entityRef>>24 < 0xF0 {
-			continue
-		}
-		hits = append(hits, spawnHit{offset: i, entityRef: entityRef})
-	}
+	// Try multiple entity ref offsets: -12 (pre-Y11S1) and -16 (Y11S1+)
+	for _, refOffset := range []int{12, 16} {
+		var hits []spawnHit
 
-	// Deduplicate entity refs (keep first occurrence)
-	seen := make(map[uint32]bool)
-	var unique []spawnHit
-	for _, h := range hits {
-		if !seen[h.entityRef] {
-			seen[h.entityRef] = true
-			unique = append(unique, h)
+		for i := 20; i+12 < len(data); i++ {
+			if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
+				continue
+			}
+			if i+10 > len(data) {
+				continue
+			}
+			counter := uint16(data[i+8]) | uint16(data[i+9])<<8
+			if counter != 494 {
+				continue
+			}
+			if i < refOffset {
+				continue
+			}
+			entityRef := binary.LittleEndian.Uint32(data[i-refOffset : i-refOffset+4])
+			if entityRef>>24 < 0xF0 {
+				continue
+			}
+			hits = append(hits, spawnHit{offset: i, entityRef: entityRef})
 		}
-	}
 
-	// Assign to player indices in order (DEF first, then ATK)
-	for idx, h := range unique {
-		if idx >= numPlayers {
-			break
+		// Deduplicate (keep first occurrence)
+		seen := make(map[uint32]bool)
+		var unique []spawnHit
+		for _, h := range hits {
+			if !seen[h.entityRef] {
+				seen[h.entityRef] = true
+				unique = append(unique, h)
+			}
 		}
-		result[h.entityRef] = idx
+
+		if len(unique) >= numPlayers/2 {
+			for idx, h := range unique {
+				if idx >= numPlayers {
+					break
+				}
+				result[h.entityRef] = idx
+			}
+			return result
+		}
 	}
 
 	return result
@@ -552,8 +559,12 @@ func BuildTracksFromLibraryPositions(positions []LibraryPosition) []*internalTra
 			trackMap[pos.EntityRef] = tr
 		}
 
+		offset := int64(pos.BinOffset)
+		if offset == 0 {
+			offset = int64(i) // fallback to sequential index if no binary offset
+		}
 		frame := PosFrame{
-			Offset:   int64(i), // Use index as pseudo-offset
+			Offset:   offset,
 			EntityID: pos.EntityRef,
 			X:        pos.X,
 			Y:        pos.Y,

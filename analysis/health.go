@@ -7,39 +7,39 @@ import (
 
 const healthHash = 0x4171D3C3 // health property hash
 
-// ExtractHealthUpdates scans the post-80% region of the binary for health
-// property updates (hash 0x4171D3C3) and maps them to players.
+// ExtractHealthUpdates scans the full binary for health property updates
+// (hash 0x4171D3C3) and maps them to players via entity ref attribution.
 func ExtractHealthUpdates(data []byte, entityToPlayer map[uint32]int, ticks []TimerTick) []HealthUpdate {
 	if len(data) < 100 {
 		return nil
 	}
 
-	// Scan post-80% region where health updates are concentrated
-	startOff := len(data) / 100 * 80
 	var updates []HealthUpdate
 	hashBytes := make([]byte, 4)
 	binary.LittleEndian.PutUint32(hashBytes, healthHash)
 
-	for i := startOff; i+16 <= len(data); i++ {
+	for i := 0; i+8 <= len(data); i++ {
 		if data[i] != hashBytes[0] || data[i+1] != hashBytes[1] ||
 			data[i+2] != hashBytes[2] || data[i+3] != hashBytes[3] {
 			continue
 		}
 
-		// Health value (float32) follows the hash
-		if i+8 > len(data) {
-			continue
-		}
+		// Health value (float32) immediately follows the hash
 		hpBits := binary.LittleEndian.Uint32(data[i+4 : i+8])
 		hp := math.Float32frombits(hpBits)
 
-		// Validate: health should be 0-125 (some operators have extra HP)
+		// Validate: health should be 0-130 (some operators have extra HP buffs)
 		if hp < 0 || hp > 130 || math.IsNaN(float64(hp)) || math.IsInf(float64(hp), 0) {
 			continue
 		}
 
-		// Find owning entity: scan ±128 bytes for F0-prefix entity ref
-		entityRef := findNearbyEntity(data, i, 128)
+		// Find owning entity: scan BACKWARD up to 256 bytes for F0-prefix entity ref.
+		// The entity ref always precedes the property hash in TLV packet layout.
+		entityRef := findPrecedingEntity(data, i, 256)
+		if entityRef == 0 {
+			// Also try a short forward scan for edge cases
+			entityRef = findNearbyEntity(data, i, 64)
+		}
 		if entityRef == 0 {
 			continue
 		}
@@ -57,6 +57,22 @@ func ExtractHealthUpdates(data []byte, entityToPlayer map[uint32]int, ticks []Ti
 	}
 
 	return updates
+}
+
+// findPrecedingEntity scans BACKWARD up to radius bytes for the nearest
+// F0-prefix entity ref (which comes before property hashes in TLV packets).
+func findPrecedingEntity(data []byte, offset, radius int) uint32 {
+	start := offset - radius
+	if start < 4 {
+		start = 4
+	}
+	for j := offset - 4; j >= start; j-- {
+		ref := binary.LittleEndian.Uint32(data[j : j+4])
+		if ref>>24 >= 0xF0 {
+			return ref
+		}
+	}
+	return 0
 }
 
 // findNearbyEntity scans ±radius bytes from offset for an F0-prefix entity ref.

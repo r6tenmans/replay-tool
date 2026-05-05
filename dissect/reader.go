@@ -40,7 +40,7 @@ type Reader struct {
 	pendingDefuserPlantIdx   int                // Y10S4+: index into MatchFeedback for DefuserPlantComplete/DisableComplete with unknown player (-1 = none)
 	pendingDefuserIsPlant    bool               // Y10S4+: true if pending event is plant (attacker), false if disable (defender)
 	lastPlayerScores         map[int]uint32     // Y10S4+: last known score per player index (for detecting +100 plant/disable bonus)
-	droneEvents              []droneEvent       // confirmed connect/disconnect events from packet data
+	DroneEvents              []DroneEvent       // confirmed connect/disconnect events from packet data
 	playerDroneState         map[uint32]uint32  // current drone ref per player (0 = not viewing)
 	droneViewMarkers         map[uint32]int     // entityRef -> seq at which 0x0880 drone-view flag was last seen
 

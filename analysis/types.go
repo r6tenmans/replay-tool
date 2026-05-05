@@ -24,6 +24,12 @@ type RoundAnalysis struct {
 	BinaryFeedback []BinaryMatchEvent `json:"binaryFeedback,omitempty"`
 	// Game actions (reinforce, gadget deploy)
 	GameActions []GameAction `json:"gameActions,omitempty"`
+	// Mid-round attacker operator swap events
+	OperatorSwaps []OperatorSwapEvent `json:"operatorSwaps,omitempty"`
+	// Player score delta events (points earned per action)
+	ScoreUpdates []ScoreUpdateEvent `json:"scoreUpdates,omitempty"`
+	// Drone connect/disconnect lifecycle events
+	DroneEvents []DroneEventEntry `json:"droneEvents,omitempty"`
 	// Timed game events for visualization
 	GameEvents []GameEvent `json:"gameEvents,omitempty"`
 	// Recording player index
@@ -62,6 +68,9 @@ type PosFrame struct {
 	ChestQY   float32 `json:"cqY,omitempty"`
 	ChestQZ   float32 `json:"cqZ,omitempty"`
 	ChestQW   float32 `json:"cqW,omitempty"`
+	// World-space head aim (body_quat × head_bone_quat)
+	HeadAimYaw   float32 `json:"headAimYaw,omitempty"`
+	HeadAimPitch float32 `json:"headAimPitch,omitempty"`
 }
 
 // PlayerTrack is a player entity's full position history with metadata.
@@ -228,6 +237,36 @@ type GameAction struct {
 	Offset   int     `json:"offset"`
 }
 
+// ScoreUpdateEvent is a single score delta event for a player.
+type ScoreUpdateEvent struct {
+	PlayerIndex int     `json:"playerIndex"`
+	Username    string  `json:"username"`
+	PrevScore   int     `json:"prevScore"`
+	NewScore    int     `json:"newScore"`
+	Delta       int     `json:"delta"`
+	TimeSecs    float32 `json:"timeSecs,omitempty"`
+	BinOffset   int     `json:"binOffset"`
+}
+
+// DroneEventEntry is a drone connect/disconnect lifecycle event.
+type DroneEventEntry struct {
+	PlayerRef uint32  `json:"playerRef"`
+	DroneRef  uint32  `json:"droneRef"`
+	Seq       int     `json:"seq"`
+	Connect   bool    `json:"connect"`
+	TimeSecs  float32 `json:"timeSecs,omitempty"`
+}
+
+// OperatorSwapEvent is a detected mid-round attacker operator change.
+type OperatorSwapEvent struct {
+	PlayerIndex  int     `json:"playerIndex"`
+	Username     string  `json:"username,omitempty"`
+	FromOperator string  `json:"fromOperator,omitempty"`
+	ToOperator   string  `json:"toOperator"`
+	Offset       int64   `json:"offset,omitempty"`
+	TimeSecs     float32 `json:"timeSecs,omitempty"`
+}
+
 // GameEvent is a timed event for visualization (kill feed, phase changes).
 type GameEvent struct {
 	Type     string  `json:"type"` // "kill", "death", "dbno", "action_start", "round_end"
@@ -245,4 +284,5 @@ type LibraryPosition struct {
 	Yaw         float32 // degrees
 	Pitch       float32 // degrees, positive = looking up
 	IsDroneView bool
+	BinOffset   int // byte offset in decompressed stream (for bone/tick matching)
 }

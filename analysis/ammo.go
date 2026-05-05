@@ -291,20 +291,19 @@ func classifyWeaponByAmmo(totalAmmo int) string {
 
 // ReconstructShots detects ammo decreases and maps each shot to the
 // nearest player position/aim direction at the moment of fire.
-func ReconstructShots(ammoEvents []AmmoEvent, players []PlayerTrack,
-	entityToPlayer map[uint32]int) []ShotEvent {
+func ReconstructShots(data []byte, ammoEvents []AmmoEvent, players []PlayerTrack,
+	playerInfos []PlayerInfo) []ShotEvent {
 
 	if len(ammoEvents) == 0 || len(players) == 0 {
 		return nil
 	}
 
-	// Build weapon → player mapping from ammo events
-	// (already done in BuildWeaponTracking, but we need it here too)
-	weaponToPlayer := make(map[uint32]int)
-	for _, pt := range players {
-		// Will be populated from the weapon tracking
-		_ = pt
+	// Build weapon → player mapping using the same init-block scanner as BuildWeaponTracking
+	ammoWeaponEIDs := make(map[uint32]bool)
+	for _, ev := range ammoEvents {
+		ammoWeaponEIDs[ev.WeaponEID] = true
 	}
+	weaponToPlayer := mapWeaponEIDsToPlayers(data, ammoWeaponEIDs, len(playerInfos), playerInfos)
 
 	// Build per-player position index sorted by offset for temporal matching
 	type posRef struct {
