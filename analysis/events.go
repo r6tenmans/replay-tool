@@ -224,133 +224,151 @@ func ClassifyEntities(tracks []*internalTrack, counters map[uint32]uint32,
 }
 
 // ExtractLoadouts scans binary header for equipment loadout records.
+// Uses auxHash slot identifiers to classify items into loadout slots.
 // Each record: [GameID u64] [auxHash u32] [category u32] (16 bytes)
-// Categories: 0x16/0x18=operator, 0x0A=weapon, 0x03=gadget
 func ExtractLoadouts(data []byte, players []PlayerInfo) []PlayerLoadout {
 	if len(data) < 192 {
 		return nil
 	}
 
 	const (
-		catOp16 = 0x16
-		catOp18 = 0x18
 		catWep  = 0x0A
 		catGadg = 0x03
+
+		// CRC32 hashes of slot names
+		slotPrimaryWeapon   uint32 = 3268402276 // "PrimaryWeapon"
+		slotMeleeWeapon     uint32 = 1696241262 // "MeleeWeapon"
+		slotReinforcement   uint32 = 2606078005 // "Reinforcement"
+		slotSecondaryWeapon uint32 = 1893246388 // "SecondaryWeapon"
+		slotSecondaryGadget uint32 = 2947831256 // "SecondaryGadget"
 	)
 
-	type loadoutHit struct {
-		offset int
-		opID   uint64
-	}
-
-	var hits []loadoutHit
 	scanLimit := len(data) / 4
 	if scanLimit < 1024 {
 		scanLimit = len(data)
 	}
 
+	// Scan for all records with known slot auxHash values
+	type slotRecord struct {
+		offset  int
+		gameID  uint64
+		auxHash uint32
+		cat     uint32
+	}
+	var records []slotRecord
+
 	for off := 0; off+16 <= scanLimit; off++ {
-		gameID := binary.LittleEndian.Uint64(data[off : off+8])
 		auxHash := binary.LittleEndian.Uint32(data[off+8 : off+12])
+
+		// Filter to known slot hashes
+		switch auxHash {
+		case slotPrimaryWeapon, slotMeleeWeapon, slotReinforcement, slotSecondaryWeapon, slotSecondaryGadget:
+			// Valid slot hash
+		default:
+			continue
+		}
+
+		gameID := binary.LittleEndian.Uint64(data[off : off+8])
 		cat := binary.LittleEndian.Uint32(data[off+12 : off+16])
 
+		// Validate game ID format
 		hiByte := (gameID >> 32) & 0xFF
 		upper3 := gameID >> 40
-		if upper3 != 0 || hiByte == 0 || auxHash != 0 {
-			continue
-		}
-		if cat != catOp16 && cat != catOp18 {
-			continue
-		}
-		if gameID < 0x100000000 {
+		if gameID == 0 || upper3 != 0 || hiByte == 0 {
 			continue
 		}
 
-		hits = append(hits, loadoutHit{offset: off, opID: gameID})
+		// Category must be weapon (10) or gadget (3)
+		if cat != catWep && cat != catGadg {
+			continue
+		}
+
+		records = append(records, slotRecord{off, gameID, auxHash, cat})
 	}
 
+	if len(records) == 0 {
+		return nil
+	}
+
+	// Group records into loadout blocks by proximity
+	// Gaps: ~48 between slots in group, ~192 between weapon/gadget groups, ~202+ between players
+	// Use 195 to include weapon+gadget groups but split between players
+	const blockGap = 195
+	var blocks [][]slotRecord
+	var currentBlock []slotRecord
+
+	for i, rec := range records {
+		if i == 0 {
+			currentBlock = append(currentBlock, rec)
+			continue
+		}
+
+		// Check if this record is near the previous one
+		prevOff := records[i-1].offset
+		if rec.offset-prevOff <= blockGap {
+			currentBlock = append(currentBlock, rec)
+		} else {
+			// Start new block
+			if len(currentBlock) > 0 {
+				blocks = append(blocks, currentBlock)
+			}
+			currentBlock = []slotRecord{rec}
+		}
+	}
+	if len(currentBlock) > 0 {
+		blocks = append(blocks, currentBlock)
+	}
+
+	// Build loadouts from blocks
 	var loadouts []PlayerLoadout
-	for idx, h := range hits {
+	for idx, block := range blocks {
+		if len(block) < 2 {
+			continue // Need at least 2 items for a valid loadout
+		}
+
 		pl := PlayerLoadout{
-			PlayerIndex:  idx,
-			OperatorID:   h.opID,
-			OperatorName: resolveItemName(h.opID),
+			PlayerIndex: idx,
 		}
 
-		var weapons, gadgets []LoadoutItem
-
-		for rec := 1; rec <= 11; rec++ {
-			recOff := h.offset + rec*16
-			if recOff+16 > len(data) {
-				break
-			}
-			gameID := binary.LittleEndian.Uint64(data[recOff : recOff+8])
-			auxHash := binary.LittleEndian.Uint32(data[recOff+8 : recOff+12])
-			cat := binary.LittleEndian.Uint32(data[recOff+12 : recOff+16])
-
-			hiByte := (gameID >> 32) & 0xFF
-			upper3 := gameID >> 40
-			if gameID == 0 || upper3 != 0 || hiByte == 0 {
-				continue
-			}
-
+		for _, rec := range block {
 			item := LoadoutItem{
-				GameID:   gameID,
-				AuxHash:  auxHash,
-				Name:     resolveItemName(gameID),
-				Category: int(cat),
+				GameID:   rec.gameID,
+				AuxHash:  rec.auxHash,
+				Name:     resolveItemName(rec.gameID),
+				Category: int(rec.cat),
 			}
 
-			switch cat {
-			case catWep:
-				weapons = append(weapons, item)
-			case catGadg:
-				gadgets = append(gadgets, item)
-			}
-		}
-
-		// Classify weapons
-		for _, w := range weapons {
-			if secondaryWeaponNames[w.Name] {
+			switch rec.auxHash {
+			case slotPrimaryWeapon:
+				if pl.PrimaryWeapon.GameID == 0 {
+					pl.PrimaryWeapon = item
+				}
+			case slotMeleeWeapon:
 				if pl.SecondaryWeapon.GameID == 0 {
-					pl.SecondaryWeapon = w
+					pl.SecondaryWeapon = item
 				}
-			} else if w.Name != "" {
-				pl.PrimaryWeapon = w
-			}
-		}
-		if pl.PrimaryWeapon.GameID == 0 && len(weapons) > 0 {
-			pl.PrimaryWeapon = weapons[len(weapons)-1]
-		}
-		if pl.SecondaryWeapon.GameID == 0 && len(weapons) > 1 {
-			for _, w := range weapons {
-				if w.GameID != pl.PrimaryWeapon.GameID {
-					pl.SecondaryWeapon = w
-					break
+			case slotReinforcement:
+				if pl.PrimaryGadget.GameID == 0 {
+					pl.PrimaryGadget = item
 				}
-			}
-		}
-
-		// Classify gadgets
-		for _, g := range gadgets {
-			if universalGadgetNames[g.Name] {
+			case slotSecondaryWeapon:
+				if pl.SecondaryWeapon.GameID == 0 {
+					pl.SecondaryWeapon = item
+				}
+			case slotSecondaryGadget:
 				if pl.SecondaryGadget.GameID == 0 {
-					pl.SecondaryGadget = g
+					pl.SecondaryGadget = item
 				}
-			} else if g.Name != "" {
-				pl.PrimaryGadget = g
 			}
 		}
 
 		loadouts = append(loadouts, pl)
 	}
 
-	// Match to players by index order (loadout blocks appear in header player order)
-	if len(loadouts) >= len(players) {
-		for i := range loadouts {
-			if i < len(players) {
-				loadouts[i].PlayerIndex = i
-			}
+	// Match loadouts to players (blocks appear in header player order)
+	for i := range loadouts {
+		if i < len(players) {
+			loadouts[i].PlayerIndex = i
 		}
 	}
 
