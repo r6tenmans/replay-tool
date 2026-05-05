@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/N4m-N4m/r6-replay-tool/analysis"
-	"github.com/redraskal/r6-dissect/dissect"
+	"github.com/wnc-replay/replay-tool/analysis"
+	"github.com/wnc-replay/replay-tool/dissect"
 )
 
 func main() {
