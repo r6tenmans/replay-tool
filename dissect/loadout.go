@@ -15,8 +15,8 @@ type AmmoUpdate struct {
 	PlayerIndex   int     `json:"playerIndex"` // -1 if unmapped
 	Time          string  `json:"time"`
 	TimeInSeconds float64 `json:"timeInSeconds"`
+	BinOffset     int     `json:"binOffset,omitempty"` // byte offset in decompressed stream
 	weaponRef     uint32  // internal: weapon entity ref for player mapping
-	firstOffset   int     // internal: binary offset of this event (for ordering)
 }
 
 // readAmmo parses ammo/loadout data from the ammo pattern (77 CA 96 DE).
@@ -103,8 +103,8 @@ func readAmmo(r *Reader) error {
 		PlayerIndex:   -1, // resolved after Read() via buildWeaponMap
 		Time:          r.timeRaw,
 		TimeInSeconds: r.time,
+		BinOffset:     startOffset,
 		weaponRef:     weaponRef,
-		firstOffset:   startOffset,
 	}
 	r.AmmoUpdates = append(r.AmmoUpdates, update)
 

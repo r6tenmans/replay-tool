@@ -22,8 +22,16 @@ type RoundAnalysis struct {
 	TimerPhases []TimerPhase `json:"timerPhases,omitempty"`
 	// Kill/DBNO events parsed directly from binary
 	BinaryFeedback []BinaryMatchEvent `json:"binaryFeedback,omitempty"`
-	// Game actions (reinforce, gadget deploy)
+	// Game actions (reinforce, gadget deploy) from binary scan
 	GameActions []GameAction `json:"gameActions,omitempty"`
+	// Game actions from the dissect library (more reliable for newer seasons)
+	LibraryGameActions []LibraryGameAction `json:"libraryGameActions,omitempty"`
+	// Camera look-direction frames from the dissect library
+	CameraFrames []LibraryCameraFrame `json:"cameraFrames,omitempty"`
+	// Shot events reconstructed by the dissect library
+	LibraryShots []LibraryShotEntry `json:"libraryShots,omitempty"`
+	// Raw ammo state updates from the dissect library
+	LibraryAmmoUpdates []LibraryAmmoUpdate `json:"libraryAmmoUpdates,omitempty"`
 	// Mid-round attacker operator swap events
 	OperatorSwaps []OperatorSwapEvent `json:"operatorSwaps,omitempty"`
 	// Player score delta events (points earned per action)
@@ -225,11 +233,57 @@ type TimerPhase struct {
 
 // BinaryMatchEvent is a kill/death/DBNO parsed from binary.
 type BinaryMatchEvent struct {
-	Offset   int64  `json:"offset"`
-	Type     string `json:"type"` // "kill", "death", "dbno"
-	Attacker string `json:"attacker"`
-	Target   string `json:"target"`
-	Headshot bool   `json:"headshot"`
+	Offset   int64   `json:"offset"`
+	Type     string  `json:"type"` // "kill", "death", "dbno"
+	Attacker string  `json:"attacker"`
+	Target   string  `json:"target"`
+	Headshot bool    `json:"headshot"`
+	TimeSecs float64 `json:"timeSecs,omitempty"`
+}
+
+// LibraryCameraFrame is a camera look-direction sample from the dissect library.
+type LibraryCameraFrame struct {
+	PlayerIndex int     `json:"playerIndex"`
+	Qx          float32 `json:"qx"`
+	Qy          float32 `json:"qy"`
+	Qz          float32 `json:"qz"`
+	Qw          float32 `json:"qw"`
+	YawDeg      float32 `json:"yawDeg"`
+	PitchDeg    float32 `json:"pitchDeg"`
+	TimeSecs    float32 `json:"timeSecs,omitempty"`
+	BinOffset   int     `json:"binOffset"`
+}
+
+// LibraryShotEntry is a shot event reconstructed by the dissect library.
+type LibraryShotEntry struct {
+	PlayerIndex   int     `json:"playerIndex"`
+	X             float32 `json:"x"`
+	Y             float32 `json:"y"`
+	Z             float32 `json:"z"`
+	Yaw           float32 `json:"yaw"`
+	Pitch         float32 `json:"pitch"`
+	HeadQX        float32 `json:"hqX,omitempty"`
+	HeadQY        float32 `json:"hqY,omitempty"`
+	HeadQZ        float32 `json:"hqZ,omitempty"`
+	HeadQW        float32 `json:"hqW,omitempty"`
+	TimeSecs      float64 `json:"timeSecs"`
+	Seq           int     `json:"seq"`
+}
+
+// LibraryAmmoUpdate is a raw ammo state update from the dissect library.
+type LibraryAmmoUpdate struct {
+	PlayerIndex int     `json:"playerIndex"`
+	Available   uint32  `json:"available"`
+	Capacity    uint32  `json:"capacity"`
+	TimeSecs    float32 `json:"timeSecs,omitempty"`
+	BinOffset   int     `json:"binOffset"`
+}
+
+// LibraryGameAction is a game action event from the dissect library.
+type LibraryGameAction struct {
+	Type      string  `json:"type"`
+	TimeSecs  float32 `json:"timeSecs,omitempty"`
+	BinOffset int     `json:"binOffset"`
 }
 
 // GameAction is a detected game action (reinforce, gadget deploy).

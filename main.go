@@ -337,6 +337,79 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				LastZ:               dt.LastZ,
 			})
 		}
+
+		// PlayerTrack.KilledAt — fill from DeathTimings using Seq→BinOffset→elapsed
+		seqToOffset := make(map[int]int64, posLen)
+		for _, pu := range reader.PositionUpdates {
+			seqToOffset[pu.Seq] = int64(pu.BinOffset)
+		}
+		for _, dt := range reader.DeathTimings {
+			for i := range output.Analysis.Players {
+				if output.Analysis.Players[i].PlayerIndex == dt.PlayerIndex {
+					if binOff, ok := seqToOffset[dt.LastMovementSeq]; ok {
+						output.Analysis.Players[i].KilledAt = float32(tickElapsed(binOff))
+					}
+					break
+				}
+			}
+		}
+
+		// Camera frames from the dissect library (spectator/POV look directions)
+		for _, cf := range reader.CameraFrames {
+			output.Analysis.CameraFrames = append(output.Analysis.CameraFrames, analysis.LibraryCameraFrame{
+				PlayerIndex: cf.PlayerIndex,
+				Qx:          cf.Qx,
+				Qy:          cf.Qy,
+				Qz:          cf.Qz,
+				Qw:          cf.Qw,
+				YawDeg:      cf.YawDeg,
+				PitchDeg:    cf.PitchDeg,
+				TimeSecs:    float32(tickElapsed(int64(cf.BinOffset))),
+				BinOffset:   cf.BinOffset,
+			})
+		}
+
+		// Library shot events (reconstructed from ammo decrements)
+		for _, se := range reader.ShotEvents {
+			binOff := int64(0)
+			if se.Seq >= 0 && se.Seq < posLen {
+				binOff = int64(reader.PositionUpdates[se.Seq].BinOffset)
+			}
+			output.Analysis.LibraryShots = append(output.Analysis.LibraryShots, analysis.LibraryShotEntry{
+				PlayerIndex: se.PlayerIndex,
+				X:           se.X,
+				Y:           se.Y,
+				Z:           se.Z,
+				Yaw:         se.Yaw,
+				Pitch:       se.Pitch,
+				HeadQX:      se.HeadQX,
+				HeadQY:      se.HeadQY,
+				HeadQZ:      se.HeadQZ,
+				HeadQW:      se.HeadQW,
+				TimeSecs:    tickElapsed(binOff),
+				Seq:         se.Seq,
+			})
+		}
+
+		// Library ammo updates (raw ammo state per weapon event)
+		for _, au := range reader.AmmoUpdates {
+			output.Analysis.LibraryAmmoUpdates = append(output.Analysis.LibraryAmmoUpdates, analysis.LibraryAmmoUpdate{
+				PlayerIndex: au.PlayerIndex,
+				Available:   au.Available,
+				Capacity:    au.Capacity,
+				TimeSecs:    float32(tickElapsed(int64(au.BinOffset))),
+				BinOffset:   au.BinOffset,
+			})
+		}
+
+		// Library game actions (more reliable than binary scan for newer seasons)
+		for _, ga := range reader.GameActions {
+			output.Analysis.LibraryGameActions = append(output.Analysis.LibraryGameActions, analysis.LibraryGameAction{
+				Type:      ga.Type,
+				TimeSecs:  float32(tickElapsed(int64(ga.BinOffset))),
+				BinOffset: ga.BinOffset,
+			})
+		}
 	}
 
 	return output

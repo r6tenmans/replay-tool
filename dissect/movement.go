@@ -861,7 +861,7 @@ func (r *Reader) buildWeaponMap(entityToPlayer map[uint32]int) {
 			continue
 		}
 		if _, exists := weaponFirstMap[ref]; !exists {
-			weaponFirstMap[ref] = r.AmmoUpdates[i].firstOffset
+			weaponFirstMap[ref] = r.AmmoUpdates[i].BinOffset
 		}
 	}
 	if len(weaponFirstMap) == 0 {
@@ -2034,7 +2034,7 @@ func (r *Reader) buildShotEvents(entityToPlayer map[uint32]int) {
 			}
 
 			// Binary search by binary offset for nearest position
-			targetOffset := au.firstOffset
+			targetOffset := au.BinOffset
 			lo, hi := 0, len(positions)-1
 			for lo <= hi {
 				mid := (lo + hi) / 2

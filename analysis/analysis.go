@@ -78,12 +78,17 @@ func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer m
 	// Step 13: Shot event reconstruction
 	result.Shots = ReconstructShots(data, ammoEvents, result.Players, players)
 
-	// Step 14: Health updates
-	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
-	AssignHealthTimes(result.HealthUpdates, result.TimerTicks, result.RoundDuration)
+	// Step 14: Health updates (filter unattributed entries where playerIndex == -1)
+	allHealth := ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
+	AssignHealthTimes(allHealth, result.TimerTicks, result.RoundDuration)
+	for _, h := range allHealth {
+		if h.PlayerIndex >= 0 {
+			result.HealthUpdates = append(result.HealthUpdates, h)
+		}
+	}
 
 	// Step 15: Binary match feedback (kills/deaths/DBNOs)
-	result.BinaryFeedback = ExtractBinaryFeedback(data)
+	result.BinaryFeedback = ExtractBinaryFeedback(data, result.TimerTicks, result.RoundDuration)
 
 	// Step 16: Game actions (reinforce, gadget deploy)
 	result.GameActions = ExtractGameActions(data, result.TimerTicks)
@@ -148,12 +153,17 @@ func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positio
 	// Step 13: Shot event reconstruction
 	result.Shots = ReconstructShots(data, ammoEvents, result.Players, players)
 
-	// Step 14: Health updates
-	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
-	AssignHealthTimes(result.HealthUpdates, result.TimerTicks, result.RoundDuration)
+	// Step 14: Health updates (filter unattributed entries where playerIndex == -1)
+	allHealth := ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
+	AssignHealthTimes(allHealth, result.TimerTicks, result.RoundDuration)
+	for _, h := range allHealth {
+		if h.PlayerIndex >= 0 {
+			result.HealthUpdates = append(result.HealthUpdates, h)
+		}
+	}
 
 	// Step 15: Binary match feedback (kills/deaths/DBNOs)
-	result.BinaryFeedback = ExtractBinaryFeedback(data)
+	result.BinaryFeedback = ExtractBinaryFeedback(data, result.TimerTicks, result.RoundDuration)
 
 	// Step 16: Game actions (reinforce, gadget deploy)
 	result.GameActions = ExtractGameActions(data, result.TimerTicks)

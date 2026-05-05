@@ -8,7 +8,7 @@ import (
 // ExtractBinaryFeedback parses kill/death/DBNO events directly from the binary.
 // Kill signature: 22 D9 13 3C BA
 // DBNO signature: 22 96 E2 29 7F (within ±70 bytes of kill)
-func ExtractBinaryFeedback(data []byte) []BinaryMatchEvent {
+func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32) []BinaryMatchEvent {
 	killSig := []byte{0x22, 0xD9, 0x13, 0x3C, 0xBA}
 	dbnoSig := []byte{0x22, 0x96, 0xE2, 0x29, 0x7F}
 
@@ -95,12 +95,14 @@ func ExtractBinaryFeedback(data []byte) []BinaryMatchEvent {
 		}
 		seen[key] = true
 
+		t := tickOffsetToElapsed(int64(i), ticks, totalDuration)
 		events = append(events, BinaryMatchEvent{
 			Offset:   int64(i),
 			Type:     evType,
 			Attacker: attacker,
 			Target:   target,
 			Headshot: headshot,
+			TimeSecs: t,
 		})
 
 		// Emit separate DBNO event
@@ -114,6 +116,7 @@ func ExtractBinaryFeedback(data []byte) []BinaryMatchEvent {
 					Attacker: attacker,
 					Target:   target,
 					Headshot: headshot,
+					TimeSecs: t,
 				})
 			}
 		}
