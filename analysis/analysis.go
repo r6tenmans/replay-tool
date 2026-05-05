@@ -80,6 +80,7 @@ func AnalyzeRoundWithMapping(data []byte, players []PlayerInfo, entityToPlayer m
 
 	// Step 14: Health updates
 	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
+	AssignHealthTimes(result.HealthUpdates, result.TimerTicks, result.RoundDuration)
 
 	// Step 15: Binary match feedback (kills/deaths/DBNOs)
 	result.BinaryFeedback = ExtractBinaryFeedback(data)
@@ -149,6 +150,7 @@ func AnalyzeRoundWithLibraryPositions(data []byte, players []PlayerInfo, positio
 
 	// Step 14: Health updates
 	result.HealthUpdates = ExtractHealthUpdates(data, entityToPlayer, result.TimerTicks)
+	AssignHealthTimes(result.HealthUpdates, result.TimerTicks, result.RoundDuration)
 
 	// Step 15: Binary match feedback (kills/deaths/DBNOs)
 	result.BinaryFeedback = ExtractBinaryFeedback(data)

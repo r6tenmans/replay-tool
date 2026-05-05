@@ -30,6 +30,8 @@ type RoundAnalysis struct {
 	ScoreUpdates []ScoreUpdateEvent `json:"scoreUpdates,omitempty"`
 	// Drone connect/disconnect lifecycle events
 	DroneEvents []DroneEventEntry `json:"droneEvents,omitempty"`
+	// Last significant movement positions for players who died
+	DeathTimings []DeathTimingEntry `json:"deathTimings,omitempty"`
 	// Timed game events for visualization
 	GameEvents []GameEvent `json:"gameEvents,omitempty"`
 	// Recording player index
@@ -246,6 +248,17 @@ type ScoreUpdateEvent struct {
 	Delta       int     `json:"delta"`
 	TimeSecs    float32 `json:"timeSecs,omitempty"`
 	BinOffset   int     `json:"binOffset"`
+}
+
+// DeathTimingEntry records the last significant movement position for a player
+// who died, estimated from position stream data.
+type DeathTimingEntry struct {
+	PlayerIndex         int     `json:"playerIndex"`
+	LastMovementSeq     int     `json:"lastMovementSeq"`
+	LastMovementTimeSec float64 `json:"lastMovementTimeSec"` // countdown seconds remaining (from game timer)
+	LastX               float32 `json:"lastX"`
+	LastY               float32 `json:"lastY"`
+	LastZ               float32 `json:"lastZ"`
 }
 
 // DroneEventEntry is a drone connect/disconnect lifecycle event.

@@ -294,6 +294,9 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 		}
 		output.Analysis.OperatorSwaps = libSwaps
 
+		// Build tick elapsed map once for reuse across event arrays
+		tickElapsed := analysis.BuildTickElapsedMap(output.Analysis.TimerTicks, output.Analysis.RoundDuration)
+
 		// Score delta events — already fully parsed by the library
 		for _, su := range reader.ScoreUpdates {
 			output.Analysis.ScoreUpdates = append(output.Analysis.ScoreUpdates, analysis.ScoreUpdateEvent{
@@ -302,17 +305,36 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				PrevScore:   su.PrevScore,
 				NewScore:    su.NewScore,
 				Delta:       su.Delta,
+				TimeSecs:    float32(tickElapsed(int64(su.BinOffset))),
 				BinOffset:   su.BinOffset,
 			})
 		}
 
-		// Drone lifecycle events — connect/disconnect confirmed from packet data
+		// Drone lifecycle events — map Seq → BinOffset via PositionUpdates, then interpolate
+		posLen := len(reader.PositionUpdates)
 		for _, de := range reader.DroneEvents {
+			binOff := int64(0)
+			if de.Seq >= 0 && de.Seq < posLen {
+				binOff = int64(reader.PositionUpdates[de.Seq].BinOffset)
+			}
 			output.Analysis.DroneEvents = append(output.Analysis.DroneEvents, analysis.DroneEventEntry{
 				PlayerRef: de.PlayerRef,
 				DroneRef:  de.DroneRef,
 				Seq:       de.Seq,
 				Connect:   de.Connect,
+				TimeSecs:  float32(tickElapsed(binOff)),
+			})
+		}
+
+		// Death timings — last significant movement position for each player who died
+		for _, dt := range reader.DeathTimings {
+			output.Analysis.DeathTimings = append(output.Analysis.DeathTimings, analysis.DeathTimingEntry{
+				PlayerIndex:         dt.PlayerIndex,
+				LastMovementSeq:     dt.LastMovementSeq,
+				LastMovementTimeSec: dt.LastMovementTime,
+				LastX:               dt.LastX,
+				LastY:               dt.LastY,
+				LastZ:               dt.LastZ,
 			})
 		}
 	}

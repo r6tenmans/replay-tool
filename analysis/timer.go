@@ -154,9 +154,13 @@ func AssignFrameTimes(tracks []*internalTrack, ticks []TimerTick, totalDuration 
 	}
 }
 
-// buildTickElapsedMap returns a closure that converts a binary offset to elapsed
+// BuildTickElapsedMap returns a closure that converts a binary offset to elapsed
 // seconds using piecewise linear interpolation anchored to timer ticks.
 // Ticks count DOWN (seconds remaining); elapsed is derived from the countdown delta.
+func BuildTickElapsedMap(ticks []TimerTick, totalDuration float32) func(int64) float64 {
+	return buildTickElapsedMap(ticks, totalDuration)
+}
+
 func buildTickElapsedMap(ticks []TimerTick, totalDuration float32) func(int64) float64 {
 	// Filter sentinel ticks
 	var real []TimerTick
@@ -220,6 +224,17 @@ func buildTickElapsedMap(ticks []TimerTick, totalDuration float32) func(int64) f
 		a0, a1 := anchors[lo-1], anchors[lo]
 		frac := float64(off-a0.offset) / float64(a1.offset-a0.offset)
 		return a0.elapsed + frac*(a1.elapsed-a0.elapsed)
+	}
+}
+
+// AssignHealthTimes assigns elapsed time to health updates using tick-based interpolation.
+func AssignHealthTimes(updates []HealthUpdate, ticks []TimerTick, totalDuration float32) {
+	if len(updates) == 0 || totalDuration <= 0 {
+		return
+	}
+	elapsed := buildTickElapsedMap(ticks, totalDuration)
+	for i := range updates {
+		updates[i].TimeSecs = float32(elapsed(int64(updates[i].BinOffset)))
 	}
 }
 

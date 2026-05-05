@@ -161,14 +161,32 @@ func tickOffsetToElapsed(offset int64, ticks []TimerTick, totalDuration float32)
 }
 
 // ExtractGameActions scans for reinforce and gadget deploy binary patterns.
+// Only scans within the region anchored by timer ticks (avoids header/footer noise).
 func ExtractGameActions(data []byte, ticks []TimerTick) []GameAction {
 	reinforcePat := []byte{0x46, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x35}
 	gadgetPat := []byte{0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x3F}
 
 	totalDuration := RoundDurationFromTicks(ticks)
+
+	// Restrict scan to the region spanned by timer ticks (between first and last tick)
+	// to avoid false-positive matches in the replay header or post-round data.
+	scanStart := 0
+	scanEnd := len(data)
+	for _, t := range ticks {
+		if t.Offset > 1000 && t.Seconds > 0 {
+			off := int(t.Offset)
+			if scanStart == 0 || off < scanStart {
+				scanStart = off
+			}
+			if off > scanEnd {
+				scanEnd = off
+			}
+		}
+	}
+
 	var actions []GameAction
 
-	for i := 0; i+10 <= len(data); i++ {
+	for i := scanStart; i+10 <= scanEnd; i++ {
 		var actionType string
 		if bytes.Equal(data[i:i+10], reinforcePat) {
 			actionType = "reinforce"
@@ -180,6 +198,11 @@ func ExtractGameActions(data []byte, ticks []TimerTick) []GameAction {
 		}
 
 		timeSecs := tickOffsetToElapsed(int64(i), ticks, totalDuration)
+
+		// Skip boundary-clamped results (timeSecs==0 often means offset is before first tick)
+		if timeSecs <= 0 {
+			continue
+		}
 
 		// Dedup: skip if within 3 seconds of previous same-type action
 		dup := false
