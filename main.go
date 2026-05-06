@@ -726,6 +726,10 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				cleaned = append(cleaned, ent)
 			}
 			output.Analysis.Entities = cleaned
+			// Once entity types are finalised, attach each barricade to the nearest
+			// same-team player at spawn time. Must run after library reclassification
+			// because the binary scanner often labels these entities "unknown".
+			analysis.AssignBarricadeOwners(output.Analysis.Entities, output.Analysis.Players)
 			// Rebuild destruction events from TrackedEntities.HealthEvents. The library's
 			// scanner properly attributes health events to entities via entity-ref proximity.
 			// The binary scanner in our analysis pipeline produces many false positives
