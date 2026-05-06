@@ -131,6 +131,7 @@ The `cmd/` directory contains binary inspection tools used for reverse engineeri
 | `cmd/opslot` | auxHash discovery for operator-gadget slot |
 | `cmd/ammoref` | Per-player weapon entity refs + Hash1/Hash2 |
 | `cmd/hashscan` | Cross-replay hash search (locate-by-block-index) |
+| `cmd/enumstats` | Aggregate kill TLV stats across many replays (decoded killEnum / weaponEntRef64 across 402 kills / 85 replays) |
 
 ```bash
 go run ./cmd/probe match-R01.rec
@@ -283,11 +284,12 @@ r6-replay-tool/
 ## TODO
 
 ### Open
-- [ ] **Decode `killEnum1` / `killEnum5` semantics** — `enum1` varies (1/2), `enum5` always 0; need more replay variety
 - [ ] **Map Y11 Sledge secondary `0x63DC6FC00D`** — likely Reaper MK2 (family `0x63DC6FC0__`); not in current dump
-- [ ] **Investigate `weaponEntRef64 = 0xFFFFFFFFFFFFFFFF` sentinel** — appears in all R06 kills; meaning unclear
+- [ ] **Refine `killEnum1=2` semantics** — verified Y11S1-only flag (39% of Y11 kills); specific meaning still unknown (wallbang? DBNO finish? marked target?)
 - [ ] **Web UI** — browser-based 2D/3D replay viewer with timeline scrubbing
 - [ ] **Multi-round batch processing** — analyze entire match folders, aggregate stats across rounds
+- [ ] **Hostage/bomb objective detection** — identify objective entities in the binary
+- [ ] **Per-round entity prefix validation** — empirical findings contradict R01=0xF006/R02=0xF005 docs
 
 ### Done
 - [x] Position extraction (SPAWN + FC-UPDATE)

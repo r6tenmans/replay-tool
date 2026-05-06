@@ -376,15 +376,15 @@ type BinaryMatchEvent struct {
 	Target   string  `json:"target"`
 	Headshot bool    `json:"headshot"`
 	TimeSecs float64 `json:"timeSecs,omitempty"`
-	// Extended TLV properties from kill/DBNO records (Y11S1+, scanned in 256-byte window).
-	// Decoded semantics (verified across 7 R06 kills):
-	WeaponEntRef64 uint64 `json:"weaponEntRef64,omitempty"` // hash 0x790009E3 — always 0xFFFFFFFFFFFFFFFF sentinel
-	KillFlag1      uint8  `json:"killFlag1,omitempty"`      // hash 0x8F0292B5 — always 0 in this dataset
-	KillEnum1      uint32 `json:"killEnum1,omitempty"`      // hash 0x5BC4BC84 — values 1/2, semantics unclear
+	// Extended TLV properties from kill/DBNO records (Y9S2+, scanned in 256-byte window).
+	// Semantics verified across 402 kills from 85 replays spanning Y9S1 → Y11S1_Alpha03.
+	WeaponEntRef64 uint64 `json:"weaponEntRef64,omitempty"` // hash 0x790009E3 — RESERVED sentinel: always 0xFFFFFFFFFFFFFFFF when present (Y9S2+); absent in Y9S1
+	KillFlag1      uint8  `json:"killFlag1,omitempty"`      // hash 0x8F0292B5 — always 0 across 402 kills (reserved)
+	KillEnum1      uint32 `json:"killEnum1,omitempty"`      // hash 0x5BC4BC84 — Y11S1+ ONLY value 2 appears (39% of Y11 kills); pre-Y11 always 1. Likely a Y11-introduced kill-metadata flag
 	KillEnum2      uint32 `json:"killEnum2,omitempty"`      // hash 0x37BF3E90 — always 1 (event-type marker)
 	KillEnum3      uint32 `json:"killEnum3,omitempty"`      // hash 0xD13DA88D — DECODED: AttackerTeam+1
 	KillEnum4      uint32 `json:"killEnum4,omitempty"`      // hash 0x3187B853 — DECODED: VictimTeam+1
-	KillEnum5      uint32 `json:"killEnum5,omitempty"`      // hash 0x0B64ADA5 — always 0 (reserved/padding)
+	KillEnum5      uint32 `json:"killEnum5,omitempty"`      // hash 0x0B64ADA5 — always 0 across 402 kills (reserved)
 	// Decoded fields (computed from raw enums + extra hashes):
 	AttackerTeam   int    `json:"attackerTeam,omitempty"`    // KillEnum3 - 1 (0=Def, 1=Atk in our data)
 	VictimTeam     int    `json:"victimTeam,omitempty"`      // KillEnum4 - 1

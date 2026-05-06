@@ -194,19 +194,21 @@ After the kill indicator, TLV fields with these hashes:
 | `0x56B4E07A` | DBNO knocker team (u32) |
 | `0xD241FB6C` | DBNO finisher team (u32) |
 
-### Y11S1+ Extended Kill TLVs
+### Extended Kill TLVs
 
-Additional TLV fields added in Y11S1+. Scanned in a 256-byte window around each kill marker. Each TLV: marker (`0x22` or `0x23`) + hash u32 LE + type byte + value. Type bytes: `0x01`=u8, `0x04`=u32, `0x08`=u64.
+Additional TLV fields. Present from Y9S2+ (one or two TLVs absent in Y9S1). Scanned in a 256-byte window around each kill marker. Each TLV: marker (`0x22` or `0x23`) + hash u32 LE + type byte + value. Type bytes: `0x01`=u8, `0x04`=u32, `0x08`=u64.
 
-| Hash | Type | Meaning |
-|------|------|---------|
-| `0x790009E3` | u64 | Weapon entity ref (8-byte) — `0xFFFFFFFFFFFFFFFF` sentinel in observed data |
-| `0x8F0292B5` | u8  | Kill flag (always `0` in observed data) |
-| `0x5BC4BC84` | u32 | Kill enum 1 (varies 1/2; semantics undecoded) |
-| `0x37BF3E90` | u32 | Kill enum 2 (always `1` — kill-type marker) |
-| `0xD13DA88D` | u32 | Kill enum 3 — **AttackerTeam + 1** |
-| `0x3187B853` | u32 | Kill enum 4 — **VictimTeam + 1** |
-| `0x0B64ADA5` | u32 | Kill enum 5 (always `0` — reserved) |
+Distributions verified across **402 kills** from **85 replays** spanning Y9S1, Y9S2_Beta01, Y10S3_Alpha02, Y11S1_Alpha03.
+
+| Hash | Type | Decoded Meaning |
+|------|------|-----------------|
+| `0x790009E3` | u64 | Reserved sentinel — **always `0xFFFFFFFFFFFFFFFF`** when present (Y9S2+); absent (zero) in Y9S1 |
+| `0x8F0292B5` | u8  | Reserved — always `0` across all 402 kills |
+| `0x5BC4BC84` | u32 | **Y11-introduced kill metadata** — pre-Y11 always `1`; in Y11S1 splits 61%/39% between `1`/`2`. Specific semantics undecoded — possible candidates: wallbang flag, DBNO-finish flag, marked-target kill, or new Y11 mechanic |
+| `0x37BF3E90` | u32 | Always `1` — kill-type marker |
+| `0xD13DA88D` | u32 | **AttackerTeam + 1** (`1`=team 0, `2`=team 1) |
+| `0x3187B853` | u32 | **VictimTeam + 1** |
+| `0x0B64ADA5` | u32 | Reserved — always `0` across all 402 kills |
 
 ## Health Property
 
