@@ -7,6 +7,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+// DefuserTick records one frame of defuser-timer state. Emitted on every
+// readDefuserTimer call after the planted/disabling state is determined.
+type DefuserTick struct {
+	TimeInSeconds float64 `json:"timeInSeconds"`
+	Time          string  `json:"time"`
+	RawValue      float64 `json:"rawValue"`
+	PrevValue     float64 `json:"prevValue"`
+	State         string  `json:"state"` // "planting" / "disabling" / "planted_idle"
+}
+
 func (r *Reader) getTeamByRole(role TeamRole) int {
 	for i, team := range r.Header.Teams {
 		if team.Role == role {
@@ -51,6 +61,23 @@ func readDefuserTimer(r *Reader) error {
 			timerValue = v
 		}
 	}
+
+	// Emit a per-frame tick so consumers can render defuser progress.
+	tickState := "planting"
+	if r.planted {
+		if r.defuserDisabling || (timerValue >= 0 && prevTimer >= 0 && timerValue > prevTimer) {
+			tickState = "disabling"
+		} else {
+			tickState = "planted_idle"
+		}
+	}
+	r.DefuserTicks = append(r.DefuserTicks, DefuserTick{
+		TimeInSeconds: r.time,
+		Time:          r.timeRaw,
+		RawValue:      timerValue,
+		PrevValue:     prevTimer,
+		State:         tickState,
+	})
 
 	var playerIndex int = -1
 

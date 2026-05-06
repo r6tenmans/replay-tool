@@ -1,6 +1,6 @@
 # r6-replay-tool
 
-Comprehensive Rainbow Six Siege `.rec` replay file analyzer. Extracts position tracking, bone/aim data, weapon analytics, equipment loadouts, shot reconstruction, health monitoring, entity classification, camera frames, and game events from replay files.
+Comprehensive Rainbow Six Siege `.rec` replay file analyzer. Extracts position tracking, bone/aim data, weapon analytics, equipment loadouts, shot reconstruction, health monitoring, entity classification, camera frames, kill TLVs, defuser ticks, scoreboard, and derived analytics from replay files.
 
 ## Features
 
@@ -16,60 +16,83 @@ Comprehensive Rainbow Six Siege `.rec` replay file analyzer. Extracts position t
 - ~74% coverage of position updates, enables precise aim direction reconstruction
 
 ### Weapons & Ammo
-- **6 decoded ammo TLV hashes**:
-  - `0x29C80A40` — current magazine ammo (decrements per shot)
-  - `0x3E6D5B6D` — loaded ammo (magazine + chambered)
-  - `0xAA4BBC34` — reserve ammo pool
-  - `0x219E95DE` — grand total (reserve + loaded)
-  - `0x653E26DD` — running total remaining
-  - `0x0A44F556` — small counter (init events)
+- **Decoded ammo TLV hashes** (`0x29C80A40` mag, `0x3E6D5B6D` loaded, `0xAA4BBC34` reserve, etc.)
+- **Hash2 weapon-slot decoder** — `0x00000000`=primary, `0x29C80A40`=secondary, `0xAA4BBC34`=grenade, `0x653E26DD`=op_gadget
 - **Shot detection** — counts magazine decrements per weapon
-- **Weapon→player mapping** via `5F 85 CC 85` init blocks (last 5% of binary)
-- **Primary/secondary classification** by ammo pool size and weapon name
+- **Per-loadout slot metadata** — `slotType`, `maxCap`, `shotCount` populated from real ammo events
+- **Session-variable ID resolver** — prefers `slotSecondaryWeapon` (canonical) over `slotMeleeWeapon` (session)
 
 ### Equipment Loadouts
-- Full equipment extraction from binary header: operator, primary weapon, secondary weapon, primary gadget, secondary gadget
-- **100+ weapon/gadget name database** (C8-SFW, MP5, Vector .45, ALDA 556, etc.)
-- Primary vs secondary classification using name lookup tables
+- **All 5 loadout slots decoded**: primary weapon, secondary weapon, **operator gadget** (auxHash `0x1DA32C08`), secondary gadget, reinforcement
+- **Y11 game-data dump integrated** — ~500 weapon/gadget hashes including all V2 instances, drone families, OSP grenades
+- All Y11 operator signature gadgets resolve: SHOCK WIRE (Bandit), KIBA BARRIER (Azami), KULAKOV (Tachanka), ERC-7 (Vigil), GLANCE SMART GLASSES (Warden), RTILA ELECTROCLAW (Kaid), BANSHEE (Melusi), WELCOME MAT (Frost), SIGNAL DISRUPTOR (Mute), VIPERSTRIKE MINE (Denari), RADAR (SolidSnake), RAM BU-GI AUTOBREACHER (Ram), and more
+- **Library loadouts** (`libraryLoadouts[]`) — top-level array with weapon entity refs, init capacities, hashes
 
 ### Health Tracking
-- Health property hash `0x4171D3C3` in post-80% binary region
-- Per-player health state changes (0=dead, 100=full, intermediates=damage)
-- Entity health events (drone destruction, gadget damage)
+- Health property hash `0x4171D3C3` with co-located sub-properties:
+  - `0xC2D846F8` — max HP
+  - `0x475BB68B` — damage rate
+  - `0xF634093A` — hit counter
+  - `0x848F67CF` — health-event time
+- **Health state labels** — `alive` / `dbno` (1–5 hp range, bleed-out fraction) / `dead`
+- Per-player health state changes with full sub-property decoding
+
+### Kill / DBNO Events (extended TLVs, Y11S1+)
+- **DBNO window** widened from 70 to 256 bytes for Y11S1 layout
+- **Decoded kill TLV fields**:
+  - `0x790009E3` — weapon entity ref (u64)
+  - `0x8F0292B5` — kill flag (u8)
+  - `0x5BC4BC84` `0x37BF3E90` `0xD13DA88D` `0x3187B853` `0x0B64ADA5` — five kill enums
+  - `0x65DD6CF8` — canonical weapon hash per kill (consistent across same-weapon kills)
+  - `0x4EA45BC3` — corroborating headshot byte
+- **Decoded enums**: `KillEnum3 - 1 = AttackerTeam`, `KillEnum4 - 1 = VictimTeam` (verified across 7 kills)
+- **DBNO attribution** — `dbnoBy`, `finishedBy` fields on `matchFeedback` entries
+
+### Round-End Scoreboard
+- `header.scoreboard[]` — final tallies per player ID (score, assists, round-assists)
+- Eliminates need to sum scoreUpdate deltas
+
+### Defuser Timer Ticks
+- `defuserTicks[]` — per-frame tick stream with `state` ("planting" / "disabling" / "planted_idle")
+- Enables progress-bar rendering and exact frame completion detection
 
 ### Entity Classification
 - **SPAWN counters**: 494=player, 154=drone, 146=gadget, 130=barricade, 138/254=weapon
-- **FC-UPDATE flag fingerprinting** for projectile sub-types (impact, grapple)
-- Barricade detection (counter=130 + flag `0x1FE0`)
+- **FC-UPDATE flag fingerprinting** for projectile sub-types
+- **Transient entity filter** — drops single-frame entities with no spawn counter (visual stubs / particles)
 
 ### Camera Frames
-- **Per-entity camera detection** — signature `0xa5b2f3a5` + forward scan for archetype `0xFE857360`
-- Maps camera look-direction to individual player entities (multi-player replay support)
-- Camera frame filtering (strips camera data from gadgets/weapons/barricades)
+- Per-entity camera detection
+- **Spectator POV periods** — recording-player camera target as contiguous time windows
 
-### Timer & Events
-- **Timer ticks** — pattern `1F 07 EF C9 04` + countdown seconds
-- **Phase detection** — prep (~44s) and action (~180s) phases from tick gaps
-- **Binary match feedback** — kill/DBNO/death events from binary signatures
-- **Game actions** — reinforce and gadget deploy detection
+### Timer & Game Events
+- Timer ticks + prep/action phase detection
+- Match feedback with raw countdown (`timeSecs`) AND decoded countdown→elapsed conversion
+- Game actions: reinforce, gadget deploy
+- Operator-swap events (Y10S4+ via `MatchFeedback`, pre-Y10S4 via binary scan)
 
-### Shot Reconstruction
-- Matches ammo decrease events to nearest player position/rotation
-- Produces per-shot events with: position (XYZ), aim direction (yaw/pitch), head bone quaternion
-- Enables bullet trace visualization
+### Derived Analytics (post-pipeline enrichments)
+- **`hits[]`** — kill→shot correlation: every kill / DBNO mapped to the killer's last shot
+- **`trades[]`** — kills within a 5s trade window of teammate's death
+- **`reinforcements[]`** — wall reinforce events deduped + attributed to nearest defender XYZ (capped at game-rule max of 10)
+- **`spectatorPeriods[]`** — recording-player POV target with frame counts
+- **`bombPlant`** — planter index, time, XYZ
+- **`bombSite`** — floor + description from defender spawn metadata + Z-cluster center
+- **`outcome`** — winning team + role + win condition (KilledOpponents / DefusedBomb / DisabledDefuser / PlantDetonation / Time)
+- **`shotDamages[]`** — per-shot damage estimates from kill events
+- **`destructionEvents[]`** — entity destructions from `TrackedEntities.HealthEvents` with entity-type classification
+
+### Maps
+- All Y9–Y11 map IDs including `HouseY11` (`434715462383`) added to `dissect/map_string.go`
 
 ## Installation
 
 ```bash
 # Clone
-git clone https://github.com/N4m-N4m/r6-replay-tool.git
-cd r6-replay-tool
+git clone https://github.com/wnc-replay/replay-tool.git
+cd replay-tool
 
 # Build
-go build -o r6-replay-tool.exe .
-
-# Or with 64-bit explicitly (recommended for large replays)
-set GOARCH=amd64
 go build -o r6-replay-tool.exe .
 ```
 
@@ -93,144 +116,136 @@ r6-replay-tool -o analysis.json match-R01.rec
 r6-replay-tool -header match-R01.rec
 ```
 
-## Output Format
+### RE Inspection Tools
 
-The JSON output has two top-level sections:
+The `cmd/` directory contains binary inspection tools used for reverse engineering. Each is built and run independently:
+
+| Tool | Purpose |
+|------|---------|
+| `cmd/inspect` | Dump context around mystery hashes + low-HP samples |
+| `cmd/probe` | Kill-marker neighborhood + event-name string search |
+| `cmd/deepscan` | Exhaustive byte survey (HP histogram, hash freq, ASCII strings, ammo refs, sg auxHash anchors) |
+| `cmd/killdecode` | Per-kill TLV table for enum decoding |
+| `cmd/healthdump` | Health sub-property distance/coverage analysis |
+| `cmd/sesweapon` | Loadout slot trace + per-kill weapon-ID extraction |
+| `cmd/opslot` | auxHash discovery for operator-gadget slot |
+| `cmd/ammoref` | Per-player weapon entity refs + Hash1/Hash2 |
+| `cmd/hashscan` | Cross-replay hash search (locate-by-block-index) |
+
+```bash
+go run ./cmd/probe match-R01.rec
+go run ./cmd/killdecode match-R01.rec
+```
+
+## Output Format
 
 ```jsonc
 {
   "header": {
-    "gameVersion": "Y11S1",
+    "gameVersion": "Y11S1_Alpha03",
     "matchId": "...",
-    "mapName": "Oregon",
+    "mapName": "HouseY11",
     "gameMode": "Bomb",
-    "roundNumber": 1,
+    "roundNumber": 5,
     "teams": [...],
     "players": [...],
-    "matchFeedback": [...]
+    "matchFeedback": [
+      {
+        "type": "Kill",
+        "username": "Killer",
+        "target": "Victim",
+        "headshot": true,
+        "time": "1:03",       // mm:ss countdown
+        "timeSecs": 63,        // raw countdown seconds
+        "dbnoBy": "Knocker",   // who downed first (if different)
+        "finishedBy": "Killer"
+      }
+    ],
+    "scoreboard": [
+      { "playerId": "d28713f0", "score": 3513, "assists": 2, "assistsFromRound": 2 }
+    ]
   },
   "analysis": {
-    "players": [...],          // Per-player position/rotation tracks
-    "entities": [...],         // Drones, cameras, gadgets, projectiles
-    "weapons": {...},          // Per-player ammo tracking
-    "loadouts": [...],         // Equipment (weapon/gadget names)
-    "shots": [...],            // Reconstructed shot events
-    "healthUpdates": [...],    // Health state changes
-    "timerTicks": [...],       // Round timer ticks
-    "timerPhases": [...],      // Prep/action phases
-    "binaryFeedback": [...],   // Kill/DBNO events from binary
-    "gameActions": [...],      // Reinforce, gadget deploy
-    "recordingPlayer": 0,      // Index of recorded POV
-    "roundDuration": 223.5     // Total round duration (seconds)
-  }
-}
-```
-
-### Player Track
-
-```jsonc
-{
-  "entityId": 4027031636,
-  "playerIndex": 0,
-  "username": "PlayerName",
-  "operator": "Sledge",
-  "teamIndex": 0,
-  "isAttacker": true,
-  "killedAtSecs": 145.2,
-  "frames": [
-    {
-      "offset": 1856,
-      "x": 3.08, "y": 8.30, "z": 4.02,
-      "yawDeg": 120.0, "pitchDeg": -5.2,
-      "timeSecs": 12.5,
-      "stance": "standing",
-      "hoX": 0.05, "hoY": -0.02, "hoZ": 0.12,  // head bone offset
-      "hqX": 0.1, "hqY": 0.0, "hqZ": 0.7, "hqW": 0.7  // head aim quat
-    }
-  ]
-}
-```
-
-### Weapon Tracking
-
-```jsonc
-{
-  "playerIndex": 0,
-  "primary": {
-    "weaponEid": 4028426207,
-    "isPrimary": true,
-    "weaponName": "L85A2",
-    "weaponCategory": "AR/SMG",
-    "magazineSize": 31,
-    "initialAmmo": 186,
-    "finalAmmo": 22,
-    "shotsFired": 47
+    "players": [...],
+    "entities": [...],
+    "weapons": {...},
+    "loadouts": [
+      {
+        "playerIndex": 3,
+        "operatorName": "Bandit",
+        "primaryWeapon": { "name": "MP7", "slotType": "primary", "shotCount": 8, "maxCap": 150 },
+        "secondaryWeapon": { "name": "KERATOS .357", "slotType": "secondary", "shotCount": 50, "maxCap": 148 },
+        "primaryGadget": { "name": "SHOCK WIRE", "slotType": "op_gadget" },
+        "secondaryGadget": { "name": "NITRO CELL (BANDIT)", "slotType": "grenade" },
+        "reinforcement": { "name": "REINFORCEMENT" }
+      }
+    ],
+    "shots": [...],
+    "healthUpdates": [
+      {
+        "playerIndex": 5, "health": 100, "state": "alive",
+        "maxHealth": 100, "damageRate": 0.08, "hitCounter": 1, "healthTime": 0
+      }
+    ],
+    "binaryFeedback": [
+      {
+        "type": "kill", "attacker": "...", "target": "...", "headshot": true,
+        "weaponId": "0x516BCE20",      // canonical weapon hash for this kill
+        "attackerTeam": 0, "victimTeam": 1,
+        "killEnum1": 2, "killEnum2": 1, "killEnum3": 1, "killEnum4": 2, "killEnum5": 0
+      }
+    ],
+    "gameEvents": [...],            // all event types: kill/dbno/plant_*/defuse_*/locate_objective/operator_swap
+    "hits": [...],                  // kill→shot correlation
+    "trades": [...],                // 5s trade-window kills
+    "reinforcements": [...],        // deduped reinforce + deployer XYZ
+    "spectatorPeriods": [...],
+    "bombPlant": { "planterIndex": 5, "timeSecs": 142, "x": ..., "y": ..., "z": ... },
+    "bombSite": { "floor": "1F", "description": "1F Kitchen, 1F Cafeteria", "centerX": 58.9, ... },
+    "outcome": { "winningTeam": 0, "winningRole": "Defense", "winCondition": "KilledOpponents", "attackersDead": 5, "defendersDead": 2 },
+    "destructionEvents": [...],
+    "recordingPlayer": 2,
+    "roundDuration": 193
   },
-  "secondary": {
-    "weaponEid": 4028426204,
-    "weaponName": "P226 MK 25",
-    "magazineSize": 16,
-    "initialAmmo": 61,
-    "shotsFired": 0
-  }
+  "libraryLoadouts": [
+    {
+      "playerIndex": 2, "username": "...",
+      "primary":   { "entityRef": 4028433332, "initialCapacity": 125, "hash1": 1047608685, "hash2": 2857960500, "isPrimary": true },
+      "secondary": { "entityRef": 4028433329, "initialCapacity": 91,  "hash1": 1047608685, "hash2": 2857960500, "isPrimary": false }
+    }
+  ],
+  "defuserTicks": [
+    { "timeSecs": 142, "time": "1:18", "rawValue": 7.0, "prevValue": 7.4, "state": "disabling" }
+  ]
 }
 ```
 
 ## Binary Format Reference
 
+See [docs/BINARY_FORMAT.md](docs/BINARY_FORMAT.md) for the full hash table, packet layouts, and TLV semantics.
+
 ### Key Patterns
 
 | Pattern | Purpose |
 |---------|---------|
-| `60 73 85 FE` | FC-UPDATE archetype (0xFE857360) — movement/entity packets |
-| `61 73 85 FE` | SPAWN archetype (0xFE857361) — entity init records |
+| `60 73 85 FE` | FC-UPDATE archetype (movement) |
+| `61 73 85 FE` | SPAWN archetype (entity init) |
 | `77 CA 96 DE` | Ammo event marker |
 | `1F 07 EF C9` | Timer tick |
 | `22 D9 13 3C BA` | Kill event indicator |
-| `22 96 E2 29 7F` | DBNO marker |
+| `22 96 E2 29 7F` | DBNO marker (within ±256 bytes of kill in Y11S1+) |
 | `02 00 70 88 98 58` | Head bone magic (BMA) |
 | `00 2C 36 14 9B` | Chest bone magic (BMB) |
-| `5F 85 CC 85` | Weapon init block (late file) |
+| `5F 85 CC 85` | Weapon init block |
 | `0xa5b2f3a5` | Camera quaternion signature |
-| `EC DA 4F 80` | Scoreboard score |
-| `1C D2 B1 9D` | Scoreboard kills |
-| `4D 73 7F 9E` | Scoreboard assists |
-
-### Binary Layout (Y10S4+)
-
-```
-[0% - 5%]    Header: player info, team data, operator loadouts
-[5% - 25%]   Entity init blocks (SPAWN records, loadout definitions)
-[25% - 95%]  Movement data (position/rotation packets, ~40K per round)
-[95% - 98%]  Weapon init blocks (5F 85 CC 85)
-[98% - 100%] Timer ticks, scoreboard, match feedback, health updates
-```
-
-### Coordinate System
-
-```
-Replay coords:  rX = east,  rY = north, rZ = up
-Three.js/World:  X = -rX,    Y = rZ,     Z = rY
-With offsets:    worldX = -rX + offsetX
-                 worldY = rZ + offsetY
-                 worldZ = rY + offsetZ
-Default Bank:    offset = (-65, -10, +17)
-```
-
-### Entity ID Prefixes
-
-```
-R01: 0xF006xxxx    R05: 0xF002xxxx
-R02: 0xF005xxxx    R06: 0xF001xxxx
-R03: 0xF004xxxx    R07: 0xF000xxxx
-R04: 0xF003xxxx    R08: 0xF00Fxxxx (rolls over)
-```
+| `61 78 8C 1D` | Operator gadget slot auxHash (`0x1DA32C08`) |
 
 ## Project Structure
 
 ```
 r6-replay-tool/
-├── main.go              # CLI entry point
+├── main.go              # CLI + buildOutput pipeline + scoreboard/loadout/defuser wiring
+├── enrich.go            # Post-pipeline analytics (hits, trades, bomb plant, outcome, etc.)
 ├── analysis/
 │   ├── analysis.go      # Main pipeline
 │   ├── types.go         # All data structures
@@ -238,10 +253,26 @@ r6-replay-tool/
 │   ├── ammo.go          # Ammo tracking + shot reconstruction
 │   ├── bone.go          # Head/chest bone data
 │   ├── camera.go        # Camera frame detection
-│   ├── events.go        # Kill/DBNO, game actions, loadouts, classification
-│   ├── health.go        # Health monitoring
+│   ├── events.go        # Kill/DBNO + extended TLVs, game actions, loadouts (6 slots), classification
+│   ├── health.go        # Health monitoring + sub-property decoder (FillHealthSubProps)
 │   ├── timer.go         # Timer ticks + phases
-│   └── names.go         # Weapon/gadget name database
+│   └── names.go         # Y11 game-data hash → name database (~500 entries)
+├── cmd/                 # RE inspection tools (run with: go run ./cmd/<tool> file.rec)
+│   ├── ammoref/
+│   ├── deepscan/
+│   ├── hashscan/
+│   ├── healthdump/
+│   ├── inspect/
+│   ├── killdecode/
+│   ├── opslot/
+│   ├── probe/
+│   └── sesweapon/
+├── dissect/             # Vendored r6-dissect fork with extensions
+│   ├── defuse.go        # ext: DefuserTick + per-frame recording
+│   ├── reader.go        # ext: DefuserTicks []DefuserTick field
+│   ├── header.go        # ext: HouseY11 = 434715462383
+│   ├── map_string.go    # ext: HouseY11 in stringer table
+│   └── ... (rest of upstream library)
 ├── docs/
 │   └── BINARY_FORMAT.md # Extended format reference
 ├── README.md
@@ -251,28 +282,10 @@ r6-replay-tool/
 
 ## TODO
 
-### High Priority
-- [ ] **Fix player-entity mapping** — SPAWN counter=494 entity ref offset needs alignment; currently 0/10 players mapped
-- [ ] **Match time syncing** — rounds can end early on objective/all-dead; don't assume full timer duration
-- [ ] **Fix look angles** — better matching between camera rotation and movement rotation data
-- [ ] **Shoot/hit detection & bullet traces** — shot events exist but need weapon-to-player linking in the pipeline
-- [ ] **Remove the `replace` directive** — vendor or publish the r6-dissect fork for standalone builds
-
-### Medium Priority
-- [ ] **Hostage/bomb/container detection** — identify objective entities in the binary
-- [ ] **Attacker operator swap** — parse `22 A9 26 0B E4` for mid-round operator changes
-- [ ] **Improve health mapping** — use ref8 block + post-block entity marker for more accurate player assignment
-- [ ] **Score delta tracking** — detect +100 score changes to identify defuser planter/disabler
-- [ ] **Entity init block fallback** — use `61 73 85 FE` init order for player mapping when SPAWN approach fails
-- [ ] **Drone connect/disconnect state machine** — track full drone viewing lifecycle (not just 0x0880 flag)
-- [ ] **Game action timestamps** — use timer tick interpolation instead of raw offset fraction for reinforce/gadget deploy times
-
-### Low Priority
-- [ ] **Rappel detection** — identify rappel state from movement packets
-- [ ] **Gadget effective area marking** — visualize gadget influence zones
-- [ ] **Per-round entity prefix validation** — R01=0xF006, R02=0xF005, etc. instead of heuristic prefix detection
-- [ ] **Barricade proximity ownership** — assign barricades to nearest same-team player
-- [ ] **Entity health events** — drone destruction, gadget damage tracking for non-player entities
+### Open
+- [ ] **Decode `killEnum1` / `killEnum5` semantics** — `enum1` varies (1/2), `enum5` always 0; need more replay variety
+- [ ] **Map Y11 Sledge secondary `0x63DC6FC00D`** — likely Reaper MK2 (family `0x63DC6FC0__`); not in current dump
+- [ ] **Investigate `weaponEntRef64 = 0xFFFFFFFFFFFFFFFF` sentinel** — appears in all R06 kills; meaning unclear
 - [ ] **Web UI** — browser-based 2D/3D replay viewer with timeline scrubbing
 - [ ] **Multi-round batch processing** — analyze entire match folders, aggregate stats across rounds
 
@@ -280,22 +293,40 @@ r6-replay-tool/
 - [x] Position extraction (SPAWN + FC-UPDATE)
 - [x] Rotation/quaternion from 0x03xx packets
 - [x] Head + chest bone data (BMA/BMB)
-- [x] Ammo tracking (6 TLV hashes)
-- [x] Weapon init block mapping
-- [x] Equipment loadout extraction (weapon/gadget names)
-- [x] Health property scanning
+- [x] Ammo tracking (TLV hashes + slot decoder)
+- [x] Equipment loadout extraction with all 6 slots (primary/secondary weapon, melee, op gadget, sec gadget, reinforcement)
+- [x] Health property scanning + sub-property decoder
 - [x] Timer tick extraction + phase detection
-- [x] Binary match feedback (kill/DBNO/death)
+- [x] Binary match feedback (kill/DBNO/death) + extended TLVs
+- [x] DBNO window expansion to 256 bytes (Y11S1+)
+- [x] Kill enum decoding (attacker/victim team derivation)
 - [x] Game action detection (reinforce, gadget deploy)
 - [x] Camera frame detection (per-entity)
 - [x] Stance inference (standing/crouching/prone)
 - [x] Entity classification (drone/gadget/barricade/weapon/projectile)
-- [x] Weapon/gadget name database (100+ items)
+- [x] Weapon/gadget name database (~500 items from Y11 game-data dump)
+- [x] HouseY11 map ID
+- [x] Operator gadget slot decoding (auxHash `0x1DA32C08`)
+- [x] Hit detection (kill→shot correlation)
+- [x] Trade kill detection
+- [x] Reinforcement positions
+- [x] Spectator POV periods
+- [x] Bomb plant location + bomb site classification
+- [x] Round outcome (winning team + win condition)
+- [x] Round-end scoreboard
+- [x] DBNO attribution (`dbnoBy` / `finishedBy`)
+- [x] Library loadouts (entity refs + capacities)
+- [x] Defuser timer ticks
+- [x] Operator swap events (Y10S4+ library + pre-Y10S4 binary)
+- [x] Drone connect/disconnect lifecycle
+- [x] Score delta tracking
+- [x] Destruction events from TrackedEntities.HealthEvents
 - [x] CLI with JSON output
 
 ## Credits
 
-- [Nam-Nam](https://github.com/N4m-N4m) — binary format research, ammo/loadout/weapon tracking, equipment name database, entity classification, web viewer
+- [Nam-Nam](https://github.com/N4m-N4m) — original binary format research, ammo/loadout/weapon tracking, equipment name database, entity classification
+- [SorrowXXX](https://github.com/SorrowXXX) — extended kill TLVs, health sub-properties, DBNO window expansion, scoreboard surfacing, library loadouts, defuser tick stream, DBNO attribution (PR #1, PR #2)
 - Based on [r6-dissect](https://github.com/redraskal/r6-dissect) by redraskal
 
 ## License

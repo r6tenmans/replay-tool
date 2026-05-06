@@ -126,7 +126,32 @@ Categories:
 - `0x0A`: weapon
 - `0x03`: gadget
 
-12 records per player (1 operator + 2 weapons + gadgets + other items).
+### Slot auxHashes (CRC32 of slot name)
+
+| auxHash (decimal) | auxHash (hex) | Slot |
+|-------------------|---------------|------|
+| `3268402276`      | `0xC2C7C124`  | PrimaryWeapon |
+| `1696241262`      | `0x651572EE`  | MeleeWeapon (session-variable IDs) |
+| `1893246388`      | `0x70DAB934`  | SecondaryWeapon (canonical IDs — preferred) |
+| `2606078005`      | `0x9B559835`  | Reinforcement (defender wall reinforcement) |
+| `2947831256`      | `0xAFB455D8`  | SecondaryGadget (universal throwable / utility) |
+| `497232904`       | `0x1DA32C08`  | **OperatorGadget** (signature gadget — Bandit's SHOCK WIRE, etc.) |
+
+Per-player loadout block ≈ 506 bytes; defender blocks come first, then attackers. The
+`MeleeWeapon` slot stores session-variable weapon IDs (`0x38C8D6___` family) that change
+per match. The `SecondaryWeapon` slot stores canonical hashes that resolve to weapon names
+via `gameItemNames` — always prefer `SecondaryWeapon` over `MeleeWeapon`.
+
+### Ammo Hash2 slot identifiers
+
+The Hash2 field in `AmmoUpdate` records identifies which slot the update is for:
+
+| Hash2 | Slot |
+|-------|------|
+| `0x00000000` | Primary weapon |
+| `0x29C80A40` | Secondary weapon |
+| `0xAA4BBC34` | Throwable / grenade |
+| `0x653E26DD` | Operator-specific gadget |
 
 ## Timer Ticks
 
@@ -148,7 +173,7 @@ Countdown timer (seconds remaining). Prep phase: counts down ~44s. Action phase:
 +M+57      Headshot flag (0 or 1)
 ```
 
-**DBNO marker**: `22 96 E2 29 7F` — appears within ±70 bytes of a kill indicator when the kill was a finish (DBNO → confirm).
+**DBNO marker**: `22 96 E2 29 7F` — appears within ±256 bytes of a kill indicator when the kill was a finish (DBNO → confirm). Window was widened from 70 to 256 bytes for Y11S1+ which inserts additional TLV fields between markers.
 
 ### Kill TLV Hashes
 
@@ -156,16 +181,32 @@ After the kill indicator, TLV fields with these hashes:
 
 | Hash | Meaning |
 |------|---------|
-| `0x70DE98C1` | Killer team index (u32: 1 or 2) |
+| `0xD13DA88D` | **Attacker team index + 1** (u32) — `1` for team 0, `2` for team 1 (decoded R06) |
+| `0x3187B853` | **Victim team index + 1** (u32) (decoded R06) |
+| `0x70DE98C1` | Killer team index (u32: 1 or 2) — duplicate of `0xD13DA88D` |
 | `0x700F19AC` | Target username (string) |
 | `0x507B2E78` | Target team index (u32) |
-| `0x4EA45BC3` | Headshot flag (byte: 0x01) |
-| `0x65DD6CF8` | Weapon entity ref (u64) |
+| `0x4EA45BC3` | **Headshot flag (u8: 0x01)** — verified across all R06 kills |
+| `0x65DD6CF8` | **Canonical weapon hash for this kill** (u64) — consistent across kills with same weapon |
 | `0x41B24805` | Cumulative kill count in round (u32) |
 | `0x7F29E296` | DBNO marker (f32: 5.0 or 10.0) |
 | `0xF32D7DF5` | DBNO finish flag (byte) |
 | `0x56B4E07A` | DBNO knocker team (u32) |
 | `0xD241FB6C` | DBNO finisher team (u32) |
+
+### Y11S1+ Extended Kill TLVs
+
+Additional TLV fields added in Y11S1+. Scanned in a 256-byte window around each kill marker. Each TLV: marker (`0x22` or `0x23`) + hash u32 LE + type byte + value. Type bytes: `0x01`=u8, `0x04`=u32, `0x08`=u64.
+
+| Hash | Type | Meaning |
+|------|------|---------|
+| `0x790009E3` | u64 | Weapon entity ref (8-byte) — `0xFFFFFFFFFFFFFFFF` sentinel in observed data |
+| `0x8F0292B5` | u8  | Kill flag (always `0` in observed data) |
+| `0x5BC4BC84` | u32 | Kill enum 1 (varies 1/2; semantics undecoded) |
+| `0x37BF3E90` | u32 | Kill enum 2 (always `1` — kill-type marker) |
+| `0xD13DA88D` | u32 | Kill enum 3 — **AttackerTeam + 1** |
+| `0x3187B853` | u32 | Kill enum 4 — **VictimTeam + 1** |
+| `0x0B64ADA5` | u32 | Kill enum 5 (always `0` — reserved) |
 
 ## Health Property
 
@@ -206,6 +247,21 @@ Entity ID: scan forward after quaternion for archetype `0xFE857360`, entity ref 
 | `46 00 00 00 00 00 00 00 04 35` | Reinforce complete |
 | `50 00 00 00 00 00 00 00 04 3F` | Gadget deployed |
 
+## Defuser Timer Ticks
+
+**Pattern**: `22 A9 C8 58 D9` (defuser timer event)
+
+Each occurrence is a frame of plant/defuse progress. The library now emits one `DefuserTick`
+per call with state derived from `r.planted` and `r.defuserDisabling`:
+
+| State | Condition |
+|-------|-----------|
+| `planting` | `!r.planted` |
+| `disabling` | `r.planted && (r.defuserDisabling \|\| timer increased vs prev)` |
+| `planted_idle` | `r.planted` and not disabling |
+
+Tick fields: `timeInSeconds`, `time` (mm:ss), `rawValue` (current timer), `prevValue` (previous timer), `state`.
+
 ## Other Patterns
 
 | Pattern | Purpose |
@@ -214,4 +270,4 @@ Entity ID: scan forward after quaternion for archetype `0xFE857360`, entity ref 
 | `22 A9 26 0B E4` | Attacker operator swap |
 | `AF 98 99 CA` | Spawn point data |
 | `59 34 E5 8B 04` | Match feedback (kill/DBNO/death) |
-| `22 A9 C8 58 D9` | Defuser timer |
+| `22 A9 C8 58 D9` | Defuser timer (per-frame tick) |

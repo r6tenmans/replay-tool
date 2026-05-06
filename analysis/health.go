@@ -5,7 +5,45 @@ import (
 	"math"
 )
 
-const healthHash = 0x4171D3C3 // health property hash
+const (
+	healthHash      uint32 = 0x4171D3C3 // health property hash
+	maxHealthHash   uint32 = 0xC2D846F8 // max HP hash
+	damageRateHash  uint32 = 0x475BB68B // damage rate hash
+	hitCounterHash  uint32 = 0xF634093A // running damage-taken counter hash
+	healthTimeHash  uint32 = 0x848F67CF // health-event time hash
+	healthSubWindow        = 256        // bytes around hp hash to scan for sub-properties
+)
+
+// FillHealthSubProps scans the 256-byte window around a health-update offset for
+// the four co-located sub-property hashes (max HP, damage rate, hit counter,
+// health time) and writes their float32 values into the provided HealthUpdate.
+//
+// These hashes were reverse-engineered from Y11S1+ replays (PR #1) and reveal the
+// per-shot DAMAGE TAKEN data the game stores alongside hp transitions — previously
+// we thought intermediate damage wasn't recorded.
+func FillHealthSubProps(data []byte, healthOff int, hu *HealthUpdate) {
+	start := healthOff - healthSubWindow
+	if start < 0 {
+		start = 0
+	}
+	end := healthOff + healthSubWindow
+	if end+8 > len(data) {
+		end = len(data) - 8
+	}
+	for j := start; j+8 <= end; j++ {
+		h := binary.LittleEndian.Uint32(data[j : j+4])
+		switch h {
+		case maxHealthHash:
+			hu.MaxHealth = math.Float32frombits(binary.LittleEndian.Uint32(data[j+4 : j+8]))
+		case damageRateHash:
+			hu.DamageRate = math.Float32frombits(binary.LittleEndian.Uint32(data[j+4 : j+8]))
+		case hitCounterHash:
+			hu.HitCounter = math.Float32frombits(binary.LittleEndian.Uint32(data[j+4 : j+8]))
+		case healthTimeHash:
+			hu.HealthTime = math.Float32frombits(binary.LittleEndian.Uint32(data[j+4 : j+8]))
+		}
+	}
+}
 
 // ExtractHealthUpdates scans the full binary for health property updates
 // (hash 0x4171D3C3) and maps them to players via entity ref attribution.
@@ -49,12 +87,14 @@ func ExtractHealthUpdates(data []byte, entityToPlayer map[uint32]int, ticks []Ti
 			pIdx = -1
 		}
 
-		updates = append(updates, HealthUpdate{
+		hu := HealthUpdate{
 			PlayerIndex: pIdx,
 			Health:      hp,
 			EntityRef:   entityRef,
 			BinOffset:   i,
-		})
+		}
+		FillHealthSubProps(data, i, &hu)
+		updates = append(updates, hu)
 	}
 
 	return updates

@@ -24,3 +24,10 @@ Thumbs.db
 
 # Go
 vendor/
+
+# Debug / RE scratch files (from cmd/ probe runs)
+check.py
+check_*.py
+debug_*.py
+*.txt
+!docs/**/*.txt

@@ -13,10 +13,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/wnc-replay/replay-tool/analysis"
 	"github.com/wnc-replay/replay-tool/dissect"
@@ -66,6 +68,11 @@ func main() {
 	// Build output
 	output := buildOutput(reader, rawData, *headerOnly)
 
+	// Run derived analytics (hits, trades, bomb plant, outcome, etc.)
+	if !*headerOnly {
+		enrichAnalysis(&output, reader)
+	}
+
 	// Marshal JSON
 	var jsonBytes []byte
 	if *pretty {
@@ -93,8 +100,52 @@ func main() {
 
 // FullOutput combines header data with binary analysis.
 type FullOutput struct {
-	Header   HeaderInfo              `json:"header"`
-	Analysis *analysis.RoundAnalysis `json:"analysis,omitempty"`
+	Header          HeaderInfo              `json:"header"`
+	Analysis        *analysis.RoundAnalysis `json:"analysis,omitempty"`
+	LibraryLoadouts []LibraryLoadoutEntry   `json:"libraryLoadouts,omitempty"`
+	DefuserTicks    []DefuserTickEntry      `json:"defuserTicks,omitempty"`
+}
+
+// DefuserTickEntry mirrors dissect.DefuserTick at the JSON layer.
+type DefuserTickEntry struct {
+	TimeSecs  float64 `json:"timeSecs"`
+	Time      string  `json:"time,omitempty"`
+	RawValue  float64 `json:"rawValue"`
+	PrevValue float64 `json:"prevValue,omitempty"`
+	State     string  `json:"state"`
+}
+
+// LibraryLoadoutEntry exposes the dissect library's per-player loadout — richer than
+// analysis.Loadouts (entity refs, hashes, capacities, gadget counts).
+type LibraryLoadoutEntry struct {
+	PlayerIndex   int                  `json:"playerIndex"`
+	Username      string               `json:"username"`
+	Primary       *LibraryWeaponInfo   `json:"primary,omitempty"`
+	Secondary     *LibraryWeaponInfo   `json:"secondary,omitempty"`
+	GadgetLoadout *LibraryGadgetCounts `json:"gadgetLoadout,omitempty"`
+}
+
+type LibraryWeaponInfo struct {
+	EntityRef       uint32 `json:"entityRef"`
+	InitialCapacity uint32 `json:"initialCapacity"`
+	Hash1           uint32 `json:"hash1,omitempty"`
+	Hash2           uint32 `json:"hash2,omitempty"`
+	IsPrimary       bool   `json:"isPrimary"`
+}
+
+type LibraryGadgetCounts struct {
+	PrimaryCount   int  `json:"primaryCount"`
+	SecondaryCount int  `json:"secondaryCount"`
+	HasPrimary     bool `json:"hasPrimary"`
+	HasSecondary   bool `json:"hasSecondary"`
+}
+
+// ScoreboardEntry is one row of the round-end scoreboard (final tallies).
+type ScoreboardEntry struct {
+	PlayerID         string `json:"playerId"`
+	Score            uint32 `json:"score"`
+	Assists          uint32 `json:"assists"`
+	AssistsFromRound uint32 `json:"assistsFromRound,omitempty"`
 }
 
 // HeaderInfo is the round header from the dissect library.
@@ -107,6 +158,7 @@ type HeaderInfo struct {
 	Teams         []TeamInfo         `json:"teams"`
 	Players       []PlayerInfoHeader `json:"players"`
 	MatchFeedback []FeedbackInfo     `json:"matchFeedback,omitempty"`
+	Scoreboard    []ScoreboardEntry  `json:"scoreboard,omitempty"`
 }
 
 type TeamInfo struct {
@@ -126,11 +178,14 @@ type PlayerInfoHeader struct {
 }
 
 type FeedbackInfo struct {
-	Type     string `json:"type"`
-	Username string `json:"username,omitempty"`
-	Target   string `json:"target,omitempty"`
-	Headshot bool   `json:"headshot,omitempty"`
-	Time     string `json:"time,omitempty"`
+	Type       string  `json:"type"`
+	Username   string  `json:"username,omitempty"`
+	Target     string  `json:"target,omitempty"`
+	Headshot   bool    `json:"headshot,omitempty"`
+	Time       string  `json:"time,omitempty"`       // mm:ss countdown string
+	TimeSecs   float64 `json:"timeSecs,omitempty"`   // raw countdown seconds (TimeInSeconds)
+	DBNOBy     string  `json:"dbnoBy,omitempty"`     // who downed the target (if different from finisher)
+	FinishedBy string  `json:"finishedBy,omitempty"` // who finished the kill on a downed target
 }
 
 func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOutput {
@@ -193,16 +248,75 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 			hs = *mf.Headshot
 		}
 		fb := FeedbackInfo{
-			Type:     mf.Type.String(),
-			Username: mf.Username,
-			Target:   mf.Target,
-			Headshot: hs,
-			Time:     mf.Time,
+			Type:       mf.Type.String(),
+			Username:   mf.Username,
+			Target:     mf.Target,
+			Headshot:   hs,
+			Time:       mf.Time,
+			TimeSecs:   mf.TimeInSeconds,
+			DBNOBy:     mf.DBNOBy,
+			FinishedBy: mf.FinishedBy,
 		}
 		header.MatchFeedback = append(header.MatchFeedback, fb)
 	}
 
+	// Round-end scoreboard (final tallies per player ID).
+	for _, sp := range reader.Scoreboard.Players {
+		header.Scoreboard = append(header.Scoreboard, ScoreboardEntry{
+			PlayerID:         hex.EncodeToString(sp.ID),
+			Score:            sp.Score,
+			Assists:          sp.Assists,
+			AssistsFromRound: sp.AssistsFromRound,
+		})
+	}
+
 	output := FullOutput{Header: header}
+
+	// Library detailed loadouts (entity refs, weapon hashes, gadget counts).
+	for _, l := range reader.Loadouts {
+		entry := LibraryLoadoutEntry{
+			PlayerIndex: l.PlayerIndex,
+			Username:    l.Username,
+		}
+		if l.Primary != nil {
+			entry.Primary = &LibraryWeaponInfo{
+				EntityRef:       l.Primary.EntityRef,
+				InitialCapacity: l.Primary.InitialCap,
+				Hash1:           l.Primary.Hash1,
+				Hash2:           l.Primary.Hash2,
+				IsPrimary:       l.Primary.IsPrimary,
+			}
+		}
+		if l.Secondary != nil {
+			entry.Secondary = &LibraryWeaponInfo{
+				EntityRef:       l.Secondary.EntityRef,
+				InitialCapacity: l.Secondary.InitialCap,
+				Hash1:           l.Secondary.Hash1,
+				Hash2:           l.Secondary.Hash2,
+				IsPrimary:       l.Secondary.IsPrimary,
+			}
+		}
+		if l.GadgetLoadout != nil {
+			entry.GadgetLoadout = &LibraryGadgetCounts{
+				PrimaryCount:   l.GadgetLoadout.PrimaryCount,
+				SecondaryCount: l.GadgetLoadout.SecondaryCount,
+				HasPrimary:     l.GadgetLoadout.HasPrimary,
+				HasSecondary:   l.GadgetLoadout.HasSecondary,
+			}
+		}
+		output.LibraryLoadouts = append(output.LibraryLoadouts, entry)
+	}
+
+	// Defuser timer ticks (per-frame plant/disable progress).
+	for _, dt := range reader.DefuserTicks {
+		output.DefuserTicks = append(output.DefuserTicks, DefuserTickEntry{
+			TimeSecs:  dt.TimeInSeconds,
+			Time:      dt.Time,
+			RawValue:  dt.RawValue,
+			PrevValue: dt.PrevValue,
+			State:     dt.State,
+		})
+	}
 
 	if headerOnly {
 		return output
@@ -296,6 +410,101 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 
 		// Build tick elapsed map once for reuse across event arrays
 		tickElapsed := analysis.BuildTickElapsedMap(output.Analysis.TimerTicks, output.Analysis.RoundDuration)
+
+		// Rebuild GameEvents from library MatchFeedback. The binary-feedback derived events
+		// have all timestamps clamped near round end because their offsets sit at 62MB+
+		// (kill-feedback region) which falls past the last timer tick anchor. The library
+		// captures countdown values per event — convert via elapsed = roundDuration - countdown.
+		// Also surface event types beyond Kill/DBNO: plant/defuse/locate/operator_swap.
+		rd := float64(output.Analysis.RoundDuration)
+		var gameEvents []analysis.GameEvent
+		for _, mf := range reader.MatchFeedback {
+			elapsed := rd - mf.TimeInSeconds
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			var typeStr, text string
+			hs := false
+			if mf.Headshot != nil {
+				hs = *mf.Headshot
+			}
+			switch mf.Type {
+			case dissect.Kill:
+				typeStr = "kill"
+				if mf.Username != "" {
+					text = mf.Username + " killed " + mf.Target
+				} else {
+					text = mf.Target + " died"
+				}
+			case dissect.Death:
+				typeStr = "death"
+				text = mf.Target + " died"
+			case dissect.DBNO:
+				typeStr = "dbno"
+				if mf.Username != "" {
+					text = mf.Username + " downed " + mf.Target
+				} else {
+					text = mf.Target + " downed"
+				}
+			case dissect.DefuserPlantStart:
+				typeStr = "plant_start"
+				text = mf.Username + " started planting"
+			case dissect.DefuserPlantComplete:
+				typeStr = "plant_complete"
+				text = mf.Username + " planted the defuser"
+			case dissect.DefuserDisableStart:
+				typeStr = "defuse_start"
+				text = mf.Username + " started defusing"
+			case dissect.DefuserDisableComplete:
+				typeStr = "defuse_complete"
+				text = mf.Username + " disabled the defuser"
+			case dissect.LocateObjective:
+				typeStr = "locate_objective"
+				text = mf.Username + " located the objective"
+			case dissect.OperatorSwap:
+				typeStr = "operator_swap"
+				text = mf.Username + " swapped to " + mf.Operator.String()
+			case dissect.PlayerLeave:
+				typeStr = "player_leave"
+				text = mf.Username + " left the match"
+			case dissect.Battleye:
+				typeStr = "battleye"
+				text = mf.Username + " kicked by BattlEye"
+			default:
+				continue
+			}
+			gameEvents = append(gameEvents, analysis.GameEvent{
+				Type:     typeStr,
+				TimeSecs: float32(elapsed),
+				Text:     text,
+				Headshot: hs,
+			})
+		}
+		gameEvents = append(gameEvents, analysis.GameEvent{
+			Type:     "round_end",
+			TimeSecs: output.Analysis.RoundDuration,
+			Text:     "Round ended",
+		})
+		sort.Slice(gameEvents, func(i, j int) bool { return gameEvents[i].TimeSecs < gameEvents[j].TimeSecs })
+		output.Analysis.GameEvents = gameEvents
+
+		// Also fix BinaryFeedback timing using the same library data: match each binary
+		// kill/dbno event to a library MatchFeedback entry by (attacker, target) and copy
+		// the corrected timestamp.
+		feedbackByPair := make(map[string]float64, len(reader.MatchFeedback))
+		for _, mf := range reader.MatchFeedback {
+			if mf.Type != dissect.Kill && mf.Type != dissect.DBNO {
+				continue
+			}
+			feedbackByPair[mf.Username+"|"+mf.Target] = rd - mf.TimeInSeconds
+		}
+		for i := range output.Analysis.BinaryFeedback {
+			bf := &output.Analysis.BinaryFeedback[i]
+			key := bf.Attacker + "|" + bf.Target
+			if t, ok := feedbackByPair[key]; ok && t >= 0 {
+				bf.TimeSecs = t
+			}
+		}
 
 		// Score delta events — already fully parsed by the library
 		for _, su := range reader.ScoreUpdates {
@@ -413,6 +622,8 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				PlayerIndex: au.PlayerIndex,
 				Available:   au.Available,
 				Capacity:    au.Capacity,
+				Hash1:       au.Hash1,
+				Hash2:       au.Hash2,
 				TimeSecs:    float32(tickElapsed(int64(au.BinOffset))),
 				BinOffset:   au.BinOffset,
 			})
@@ -433,11 +644,14 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 		// Assign timing via min-max over the combined health update offset range.
 		if len(reader.HealthUpdates) > 0 {
 			for _, hu := range reader.HealthUpdates {
-				output.Analysis.HealthUpdates = append(output.Analysis.HealthUpdates, analysis.HealthUpdate{
+				h := analysis.HealthUpdate{
 					PlayerIndex: hu.PlayerIndex,
 					Health:      hu.Health,
 					BinOffset:   hu.BinOffset,
-				})
+				}
+				// Apply the same sub-property scan as the binary extractor.
+				analysis.FillHealthSubProps(rawData, hu.BinOffset, &h)
+				output.Analysis.HealthUpdates = append(output.Analysis.HealthUpdates, h)
 			}
 			// Re-apply min-max timing over all health updates (binary scanner + library).
 			if len(output.Analysis.HealthUpdates) > 0 {
@@ -456,6 +670,21 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 						frac := float64(int64(output.Analysis.HealthUpdates[i].BinOffset)-minOff) / float64(maxOff-minOff)
 						output.Analysis.HealthUpdates[i].TimeSecs = float32(frac * float64(output.Analysis.RoundDuration))
 					}
+				}
+			}
+			// Label health state. Values cluster into three regimes (deduced from binary
+			// inspection of the 0x4171D3C3 health hash: only 0, (0,5), and >=100 appear —
+			// no values between 5 and 100). The (0,5) range is the bleeding-out DBNO HP
+			// fraction; once it reaches 0 the player is dead.
+			for i := range output.Analysis.HealthUpdates {
+				h := output.Analysis.HealthUpdates[i].Health
+				switch {
+				case h == 0:
+					output.Analysis.HealthUpdates[i].State = "dead"
+				case h < 5:
+					output.Analysis.HealthUpdates[i].State = "dbno"
+				default:
+					output.Analysis.HealthUpdates[i].State = "alive"
 				}
 			}
 		}
@@ -483,6 +712,81 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 					output.Analysis.Entities[i].BarricadeType = te.BarricadeType
 				}
 			}
+			// Filter transient/sub-entities. Binary inspection of the SPAWN pattern (61 73 85 FE)
+			// shows ALL 376 matches have counter=0 — the real classification (counter=130/138/146/154/254)
+			// happens elsewhere in the binary and is reflected in reader.TrackedEntities. Entities not
+			// in TrackedEntities AND with only 1 position frame are visual stubs (bullet impacts,
+			// particle effects, network sync placeholders), not gameplay entities.
+			cleaned := output.Analysis.Entities[:0]
+			for _, ent := range output.Analysis.Entities {
+				_, isTracked := trackedMap[ent.EntityID]
+				if !isTracked && len(ent.Frames) <= 1 && ent.Type == "unknown" {
+					continue
+				}
+				cleaned = append(cleaned, ent)
+			}
+			output.Analysis.Entities = cleaned
+			// Rebuild destruction events from TrackedEntities.HealthEvents. The library's
+			// scanner properly attributes health events to entities via entity-ref proximity.
+			// The binary scanner in our analysis pipeline produces many false positives
+			// (entity refs like 0xF0000000 are padding alignment in the health stream).
+			var libDestructions []analysis.DestructionEvent
+			var allOffsets []int64
+			for _, te := range reader.TrackedEntities {
+				if len(te.HealthEvents) < 2 {
+					continue
+				}
+				prevHP := -1
+				for _, he := range te.HealthEvents {
+					if prevHP > 0 && he.HP == 0 {
+						entityType := string(te.Type)
+						if entityType == "" {
+							entityType = "unknown"
+						}
+						libDestructions = append(libDestructions, analysis.DestructionEvent{
+							EntityID:   te.EntityRef,
+							EntityType: entityType,
+							GadgetType: te.GadgetName,
+							BinOffset:  he.Offset,
+						})
+						allOffsets = append(allOffsets, he.Offset)
+						break
+					}
+					prevHP = he.HP
+				}
+			}
+			// Assign timing using the player health update offset range as a reference frame.
+			// In Y11S1 the health stream sits below the first timer tick anchor (tickElapsed → 0),
+			// and a single destruction event has no min-max range of its own. Player health
+			// updates (already populated by min-max above) span the full round and share the
+			// same byte region as entity health events.
+			if len(libDestructions) > 0 && len(output.Analysis.HealthUpdates) >= 2 {
+				huMin, huMax := int64(output.Analysis.HealthUpdates[0].BinOffset), int64(output.Analysis.HealthUpdates[0].BinOffset)
+				for _, hu := range output.Analysis.HealthUpdates {
+					o := int64(hu.BinOffset)
+					if o < huMin {
+						huMin = o
+					}
+					if o > huMax {
+						huMax = o
+					}
+				}
+				rd := float64(output.Analysis.RoundDuration)
+				if huMax > huMin {
+					for i := range libDestructions {
+						o := libDestructions[i].BinOffset
+						if o < huMin {
+							o = huMin
+						}
+						if o > huMax {
+							o = huMax
+						}
+						frac := float64(o-huMin) / float64(huMax-huMin)
+						libDestructions[i].TimeSecs = float32(frac * rd)
+					}
+				}
+			}
+			output.Analysis.DestructionEvents = libDestructions
 		}
 	}
 

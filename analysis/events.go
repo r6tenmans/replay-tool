@@ -8,7 +8,108 @@ import (
 
 // ExtractBinaryFeedback parses kill/death/DBNO events directly from the binary.
 // Kill signature: 22 D9 13 3C BA
-// DBNO signature: 22 96 E2 29 7F (within ±70 bytes of kill)
+// DBNO signature: 22 96 E2 29 7F (within ±dbnoWindowBytes of kill)
+//
+// Window expanded to 256 bytes for Y11S1+ (was 70). Y11 added extended TLV fields
+// between kill and DBNO markers, pushing the DBNO marker outside the old window.
+const dbnoWindowBytes = 256
+
+// Hash constants for extended kill TLVs (Y11S1+, scanned in 256-byte window):
+const (
+	kHashWeaponEntRef64 uint32 = 0x790009E3
+	kHashKillFlag1      uint32 = 0x8F0292B5
+	kHashKillEnum1      uint32 = 0x5BC4BC84
+	kHashKillEnum2      uint32 = 0x37BF3E90
+	kHashKillEnum3      uint32 = 0xD13DA88D
+	kHashKillEnum4      uint32 = 0x3187B853
+	kHashKillEnum5      uint32 = 0x0B64ADA5
+	// Decoded extra hashes (R06 analysis):
+	kHashWeaponID     uint32 = 0x65DD6CF8 // u64 session-variable ID of killing weapon
+	kHashHeadshotByte uint32 = 0x4EA45BC3 // u8, corroborates byte-offset headshot detection
+)
+
+// fillExtendedKillTLVs scans the area around a kill marker for the seven extended
+// TLV property hashes and writes their values into the BinaryMatchEvent.
+//
+// Each TLV is encoded as: marker (0x22 or 0x23) + hash u32 + type byte + value.
+// Type bytes: 0x01=u8, 0x04=u32, 0x08=u64.
+func fillExtendedKillTLVs(data []byte, killOff, window int, ev *BinaryMatchEvent) {
+	start := killOff - window
+	if start < 0 {
+		start = 0
+	}
+	end := killOff + window
+	if end+13 > len(data) {
+		end = len(data) - 13
+	}
+	// Keep the first match per hash (closer to the kill marker = more likely the right one).
+	var have struct {
+		w, f, e1, e2, e3, e4, e5, wid, hsb bool
+	}
+	for j := start; j+9 < end; j++ {
+		if data[j] != 0x22 && data[j] != 0x23 {
+			continue
+		}
+		h := binary.LittleEndian.Uint32(data[j+1 : j+5])
+		typeByte := data[j+5]
+		switch h {
+		case kHashWeaponEntRef64:
+			if !have.w && typeByte == 0x08 && j+14 <= len(data) {
+				ev.WeaponEntRef64 = binary.LittleEndian.Uint64(data[j+6 : j+14])
+				have.w = true
+			}
+		case kHashKillFlag1:
+			if !have.f && typeByte == 0x01 && j+7 <= len(data) {
+				ev.KillFlag1 = data[j+6]
+				have.f = true
+			}
+		case kHashKillEnum1:
+			if !have.e1 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.KillEnum1 = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.e1 = true
+			}
+		case kHashKillEnum2:
+			if !have.e2 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.KillEnum2 = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.e2 = true
+			}
+		case kHashKillEnum3:
+			if !have.e3 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.KillEnum3 = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.e3 = true
+			}
+		case kHashKillEnum4:
+			if !have.e4 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.KillEnum4 = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.e4 = true
+			}
+		case kHashKillEnum5:
+			if !have.e5 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.KillEnum5 = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.e5 = true
+			}
+		case kHashWeaponID:
+			if !have.wid && typeByte == 0x08 && j+14 <= len(data) {
+				ev.WeaponID = binary.LittleEndian.Uint64(data[j+6 : j+14])
+				have.wid = true
+			}
+		case kHashHeadshotByte:
+			if !have.hsb && typeByte == 0x01 && j+7 <= len(data) {
+				ev.HeadshotByte = data[j+6]
+				have.hsb = true
+			}
+		}
+	}
+	// Compute decoded team fields (KillEnum3 = AttackerTeam+1, KillEnum4 = VictimTeam+1).
+	// Only set if the enum was found and is non-zero.
+	if ev.KillEnum3 > 0 {
+		ev.AttackerTeam = int(ev.KillEnum3) - 1
+	}
+	if ev.KillEnum4 > 0 {
+		ev.VictimTeam = int(ev.KillEnum4) - 1
+	}
+}
+
 func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32) []BinaryMatchEvent {
 	killSig := []byte{0x22, 0xD9, 0x13, 0x3C, 0xBA}
 	dbnoSig := []byte{0x22, 0x96, 0xE2, 0x29, 0x7F}
@@ -68,13 +169,13 @@ func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32
 			continue
 		}
 
-		// Check for DBNO marker within ±70 bytes
+		// Check for DBNO marker within ±dbnoWindowBytes (Y11S1+ widened from 70)
 		isDBNO := false
-		searchStart := i - 70
+		searchStart := i - dbnoWindowBytes
 		if searchStart < 0 {
 			searchStart = 0
 		}
-		searchEnd := i + 70
+		searchEnd := i + dbnoWindowBytes
 		if searchEnd+5 > len(data) {
 			searchEnd = len(data) - 5
 		}
@@ -97,28 +198,32 @@ func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32
 		seen[key] = true
 
 		t := tickOffsetToElapsed(int64(i), ticks, totalDuration)
-		events = append(events, BinaryMatchEvent{
+		ev := BinaryMatchEvent{
 			Offset:   int64(i),
 			Type:     evType,
 			Attacker: attacker,
 			Target:   target,
 			Headshot: headshot,
 			TimeSecs: t,
-		})
+		}
+		fillExtendedKillTLVs(data, i, dbnoWindowBytes, &ev)
+		events = append(events, ev)
 
 		// Emit separate DBNO event
 		if isDBNO {
 			dbnoKey := eventKey{"dbno", attacker, target}
 			if !seen[dbnoKey] {
 				seen[dbnoKey] = true
-				events = append(events, BinaryMatchEvent{
+				dbnoEv := BinaryMatchEvent{
 					Offset:   int64(i),
 					Type:     "dbno",
 					Attacker: attacker,
 					Target:   target,
 					Headshot: headshot,
 					TimeSecs: t,
-				})
+				}
+				fillExtendedKillTLVs(data, i, dbnoWindowBytes, &dbnoEv)
+				events = append(events, dbnoEv)
 			}
 		}
 	}
@@ -338,12 +443,13 @@ func ExtractLoadouts(data []byte, players []PlayerInfo) []PlayerLoadout {
 		catWep  = 0x0A
 		catGadg = 0x03
 
-		// CRC32 hashes of slot names
+		// CRC32 hashes of slot names (reverse-engineered from binary inspection)
 		slotPrimaryWeapon   uint32 = 3268402276 // "PrimaryWeapon"
 		slotMeleeWeapon     uint32 = 1696241262 // "MeleeWeapon"
-		slotReinforcement   uint32 = 2606078005 // "Reinforcement"
+		slotReinforcement   uint32 = 2606078005 // "Reinforcement" (wall reinforcement, defenders)
 		slotSecondaryWeapon uint32 = 1893246388 // "SecondaryWeapon"
 		slotSecondaryGadget uint32 = 2947831256 // "SecondaryGadget"
+		slotOperatorGadget  uint32 = 497232904  // "OperatorGadget" (signature gadget, e.g. Bandit's SHOCK WIRE)
 	)
 
 	scanLimit := len(data) / 4
@@ -365,7 +471,7 @@ func ExtractLoadouts(data []byte, players []PlayerInfo) []PlayerLoadout {
 
 		// Filter to known slot hashes
 		switch auxHash {
-		case slotPrimaryWeapon, slotMeleeWeapon, slotReinforcement, slotSecondaryWeapon, slotSecondaryGadget:
+		case slotPrimaryWeapon, slotMeleeWeapon, slotReinforcement, slotSecondaryWeapon, slotSecondaryGadget, slotOperatorGadget:
 			// Valid slot hash
 		default:
 			continue
@@ -447,17 +553,24 @@ func ExtractLoadouts(data []byte, players []PlayerInfo) []PlayerLoadout {
 					pl.PrimaryWeapon = item
 				}
 			case slotMeleeWeapon:
+				// slotMeleeWeapon stores session-variable weapon IDs (0x38C8D6___ family
+				// etc.) that change per match. Use as fallback only when slotSecondaryWeapon
+				// hasn't populated yet.
 				if pl.SecondaryWeapon.GameID == 0 {
 					pl.SecondaryWeapon = item
 				}
 			case slotReinforcement:
+				if pl.Reinforcement.GameID == 0 {
+					pl.Reinforcement = item
+				}
+			case slotOperatorGadget:
 				if pl.PrimaryGadget.GameID == 0 {
 					pl.PrimaryGadget = item
 				}
 			case slotSecondaryWeapon:
-				if pl.SecondaryWeapon.GameID == 0 {
-					pl.SecondaryWeapon = item
-				}
+				// Prefer slotSecondaryWeapon (canonical gameID) over slotMeleeWeapon
+				// (session-variable ID). Overwrite even if SecondaryWeapon was set from melee.
+				pl.SecondaryWeapon = item
 			case slotSecondaryGadget:
 				if pl.SecondaryGadget.GameID == 0 {
 					pl.SecondaryGadget = item
