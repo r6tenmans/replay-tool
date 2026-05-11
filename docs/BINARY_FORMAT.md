@@ -83,6 +83,15 @@ Found within large FC-UPDATE packets. Payload (36 bytes after magic):
 
 Same 36-byte payload layout as head bone but for chest.
 
+### Bone Inventory
+
+R6 replays persist **only head and chest** bone transforms — verified by
+exhaustive shape-based scan across the binary: only BMA (`02 00 70 88 98 58`)
+and BMB (`00 2C 36 14 9B`) match the 36-byte `[xyz][1.0][quat][1.0]` payload
+shape. Other body parts (arms, legs, feet, hands) are not stored in replay
+files; they are reconstructed at playback time via inverse kinematics from
+head + chest + position state.
+
 ## Ammo Events
 
 **Pattern**: `77 CA 96 DE` (4 bytes)
