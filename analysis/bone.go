@@ -13,23 +13,39 @@ var (
 )
 
 // ExtractBoneData scans for BMA (head) and BMB (chest) bone data within
-// FC-UPDATE movement packets and attaches them to the nearest position frame.
+// FC-UPDATE movement packets and attaches them to the position frame from the
+// SAME packet.
 //
-// BMA Section A (36 bytes after magic):
+// REFACTORED: walks each BMA hit and binds it to the FIRST FC-UPDATE pattern
+// found within 500 bytes BACKWARD (the parent packet). Each FC-UPDATE owns
+// at most one BMA. Once a BMA is consumed by an FC-UPDATE, subsequent BMAs
+// look for a NEW (later) parent packet. Tighter than the original 2000-byte
+// backward search and prevents one FC-UPDATE from claiming multiple BMAs.
 //
-//	[headOffX f32][headOffY f32][headOffZ f32][1.0 separator]
-//	[aimQx f32][aimQy f32][aimQz f32][aimQw f32][1.0 separator]
+// Spec for in-packet layout:
 //
-// BMB Section B (36 bytes after magic):
+//	BMA at offset i:
+//	  [i:i+6]     = 02 00 70 88 98 58   (head magic)
+//	  [i+6:i+18]  = head offset XYZ (|x|,|y|,|z| < 2)
+//	  [i+18:i+22] = separator 1.0
+//	  [i+22:i+38] = aim quaternion (unit)
+//	  [i+38:i+42] = separator 1.0
 //
-//	[chestOffX f32][chestOffY f32][chestOffZ f32][1.0 separator]
-//	[chestQx f32][chestQy f32][chestQz f32][chestQw f32][1.0 separator]
+//	BMB IMMEDIATELY AFTER BMA — within [BMAstart+36, BMAstart+46]:
+//	  [j:j+5]     = 00 2C 36 14 9B      (chest magic)
+//	  [j+5:j+17]  = chest offset XYZ
+//	  [j+17:j+21] = separator 1.0
+//	  [j+21:j+37] = chest quaternion
+//	  [j+37:j+41] = separator 1.0
+//
+// pktSize at offset-8 from FC-UPDATE pattern is NOT reliable in Y11S1 binaries
+// (always 0 across 106 K packets in observed data), so we use a fixed-size
+// backward search window instead.
 func ExtractBoneData(data []byte, tracks []*internalTrack) {
 	if len(data) < 100 || len(tracks) == 0 {
 		return
 	}
 
-	// Build entity → track index + frame index for nearest-offset lookup
 	entityFrames := make(map[uint32][]boneFrameRef)
 	for ti := range tracks {
 		for fi := range tracks[ti].Frames {
@@ -39,60 +55,78 @@ func ExtractBoneData(data []byte, tracks []*internalTrack) {
 		}
 	}
 
-	archetypeFC := []byte{0x60, 0x73, 0x85, 0xFE}
+	pat := []byte{0x60, 0x73, 0x85, 0xFE}
 
-	// Scan for BMA (head bone)
-	for i := 0; i+6+36 <= len(data); i++ {
+	// First pass: collect all VALID FC-UPDATE packet starts. A valid packet has
+	// an F0-prefix entity ref at -12 from the pattern (= startOffset-16 in the
+	// dissect library's terminology, where startOffset = patternStart+4). The
+	// raw `60 73 85 FE` pattern matches in many coincidental locations — filter
+	// those out up front.
+	type fcPacket struct {
+		off       int
+		entityRef uint32
+	}
+	var fcPackets []fcPacket
+	for i := 16; i+10 < len(data); i++ {
+		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
+			continue
+		}
+		// Entity ref at patternStart-12 (= library's startOffset-16).
+		entityRef := binary.LittleEndian.Uint32(data[i-12 : i-8])
+		if entityRef>>24 != 0xF0 {
+			continue
+		}
+		fcPackets = append(fcPackets, fcPacket{i, entityRef})
+	}
+
+	// Walk every BMA candidate. For each, find the IMMEDIATE preceding valid
+	// FC-UPDATE packet (binary search) within 500 bytes.
+	const maxBackDistance = 500
+	lastClaimedIdx := -1
+
+	for i := 6; i+42 <= len(data); i++ {
 		if data[i] != 0x02 || !bytes.Equal(data[i:i+6], boneMagicA) {
 			continue
 		}
 
-		payloadOff := i + 6
-		if payloadOff+36 > len(data) {
+		hoX, hoY, hoZ, qx, qy, qz, qw, okA := decodeBMAPayload(data, i)
+		if !okA {
 			continue
 		}
 
-		hoX := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff : payloadOff+4]))
-		hoY := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+4 : payloadOff+8]))
-		hoZ := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+8 : payloadOff+12]))
-
-		// Validate head offsets (should be small, < 2m)
-		if absF(hoX) > 2 || absF(hoY) > 2 || absF(hoZ) > 2 {
+		// Binary search for the latest fcPacket with off <= i, skipping any
+		// already claimed (idx <= lastClaimedIdx).
+		lo, hi := 0, len(fcPackets)
+		for lo < hi {
+			mid := (lo + hi) / 2
+			if fcPackets[mid].off > i {
+				hi = mid
+			} else {
+				lo = mid + 1
+			}
+		}
+		idx := lo - 1
+		// Walk back if this index is already claimed.
+		for idx > lastClaimedIdx && fcPackets[idx].off > i {
+			idx--
+		}
+		if idx <= lastClaimedIdx || idx < 0 {
 			continue
 		}
-
-		// Separator should be ~1.0
-		sep := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+12 : payloadOff+16]))
-		if sep < 0.99 || sep > 1.01 {
+		fcStart := fcPackets[idx].off
+		if i-fcStart > maxBackDistance {
 			continue
 		}
+		entityRef := fcPackets[idx].entityRef
 
-		qx := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+16 : payloadOff+20]))
-		qy := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+20 : payloadOff+24]))
-		qz := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+24 : payloadOff+28]))
-		qw := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+28 : payloadOff+32]))
-
-		if !isUnitQuat(qx, qy, qz, qw) {
-			continue
-		}
-
-		// Find enclosing FC-UPDATE entity by scanning backward for archetype marker
-		entityRef := findEnclosingEntity(data, i, archetypeFC)
-		if entityRef == 0 {
-			continue
-		}
-
-		// Find nearest frame for this entity
 		refs, ok := entityFrames[entityRef]
 		if !ok || len(refs) == 0 {
 			continue
 		}
-
-		bestRef := findNearestFrame(refs, int64(i), tracks)
+		bestRef := findNearestFrame(refs, int64(fcStart), tracks)
 		if bestRef.trackIdx < 0 {
 			continue
 		}
-
 		f := &tracks[bestRef.trackIdx].Frames[bestRef.frameIdx]
 		f.HeadOffX = hoX
 		f.HeadOffY = hoY
@@ -101,65 +135,88 @@ func ExtractBoneData(data []byte, tracks []*internalTrack) {
 		f.HeadQY = qy
 		f.HeadQZ = qz
 		f.HeadQW = qw
+
+		// BMB must IMMEDIATELY follow BMA within [BMAstart+36, BMAstart+46].
+		chestSearchStart := i + 36
+		chestSearchEnd := i + 46
+		if chestSearchEnd+41 > len(data) {
+			chestSearchEnd = len(data) - 41
+		}
+		for k := chestSearchStart; k <= chestSearchEnd && k+5 <= len(data); k++ {
+			if data[k] != 0x00 || !bytes.Equal(data[k:k+5], boneMagicB) {
+				continue
+			}
+			coX, coY, coZ, cqx, cqy, cqz, cqw, okB := decodeBMBPayload(data, k)
+			if !okB {
+				continue
+			}
+			f.ChestOffX = coX
+			f.ChestOffY = coY
+			f.ChestOffZ = coZ
+			f.ChestQX = cqx
+			f.ChestQY = cqy
+			f.ChestQZ = cqz
+			f.ChestQW = cqw
+			break
+		}
+
+		lastClaimedIdx = idx
 	}
+}
 
-	// Scan for BMB (chest bone)
-	for i := 0; i+5+36 <= len(data); i++ {
-		if data[i] != 0x00 || !bytes.Equal(data[i:i+5], boneMagicB) {
-			continue
-		}
-
-		payloadOff := i + 5
-		if payloadOff+36 > len(data) {
-			continue
-		}
-
-		coX := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff : payloadOff+4]))
-		coY := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+4 : payloadOff+8]))
-		coZ := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+8 : payloadOff+12]))
-
-		if absF(coX) > 2 || absF(coY) > 2 || absF(coZ) > 2 {
-			continue
-		}
-
-		sep := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+12 : payloadOff+16]))
-		if sep < 0.99 || sep > 1.01 {
-			continue
-		}
-
-		cqx := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+16 : payloadOff+20]))
-		cqy := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+20 : payloadOff+24]))
-		cqz := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+24 : payloadOff+28]))
-		cqw := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+28 : payloadOff+32]))
-
-		if !isUnitQuat(cqx, cqy, cqz, cqw) {
-			continue
-		}
-
-		entityRef := findEnclosingEntity(data, i, archetypeFC)
-		if entityRef == 0 {
-			continue
-		}
-
-		refs, ok := entityFrames[entityRef]
-		if !ok || len(refs) == 0 {
-			continue
-		}
-
-		bestRef := findNearestFrame(refs, int64(i), tracks)
-		if bestRef.trackIdx < 0 {
-			continue
-		}
-
-		f := &tracks[bestRef.trackIdx].Frames[bestRef.frameIdx]
-		f.ChestOffX = coX
-		f.ChestOffY = coY
-		f.ChestOffZ = coZ
-		f.ChestQX = cqx
-		f.ChestQY = cqy
-		f.ChestQZ = cqz
-		f.ChestQW = cqw
+// decodeBMAPayload validates the 36-byte head bone payload following BMA magic
+// and returns the head offset XYZ + aim quaternion. okA=false on validation fail.
+func decodeBMAPayload(data []byte, magicOff int) (hoX, hoY, hoZ, qx, qy, qz, qw float32, okA bool) {
+	payloadOff := magicOff + 6
+	if payloadOff+36 > len(data) {
+		return
 	}
+	hoX = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff : payloadOff+4]))
+	hoY = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+4 : payloadOff+8]))
+	hoZ = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+8 : payloadOff+12]))
+	if absF(hoX) > 2 || absF(hoY) > 2 || absF(hoZ) > 2 {
+		return
+	}
+	sep := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+12 : payloadOff+16]))
+	if sep < 0.99 || sep > 1.01 {
+		return
+	}
+	qx = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+16 : payloadOff+20]))
+	qy = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+20 : payloadOff+24]))
+	qz = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+24 : payloadOff+28]))
+	qw = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+28 : payloadOff+32]))
+	if !isUnitQuat(qx, qy, qz, qw) {
+		return
+	}
+	okA = true
+	return
+}
+
+// decodeBMBPayload validates the 36-byte chest bone payload following BMB magic.
+func decodeBMBPayload(data []byte, magicOff int) (coX, coY, coZ, cqx, cqy, cqz, cqw float32, okB bool) {
+	payloadOff := magicOff + 5
+	if payloadOff+36 > len(data) {
+		return
+	}
+	coX = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff : payloadOff+4]))
+	coY = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+4 : payloadOff+8]))
+	coZ = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+8 : payloadOff+12]))
+	if absF(coX) > 2 || absF(coY) > 2 || absF(coZ) > 2 {
+		return
+	}
+	sep := math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+12 : payloadOff+16]))
+	if sep < 0.99 || sep > 1.01 {
+		return
+	}
+	cqx = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+16 : payloadOff+20]))
+	cqy = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+20 : payloadOff+24]))
+	cqz = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+24 : payloadOff+28]))
+	cqw = math.Float32frombits(binary.LittleEndian.Uint32(data[payloadOff+28 : payloadOff+32]))
+	if !isUnitQuat(cqx, cqy, cqz, cqw) {
+		return
+	}
+	okB = true
+	return
 }
 
 // findEnclosingEntity scans backward from offset to find the FC-UPDATE

@@ -20,13 +20,16 @@ After decompression, the binary contains:
 **Archetype**: `0xFE857360` (LE bytes: `60 73 85 FE`)
 
 ```
-Offset from pattern:
-  -16..-13  Entity ref (u32 LE, F0-prefix for players)
-   -8..-5   Packet size (u32 LE)
+Offset from pattern (Y11S1 verified):
+  -12..-9   Entity ref (u32 LE, F0-prefix for players, library reads from startOffset-16 = patternStart-12)
+   -8..-5   Flags (typically 0x00000000 or 0x60000000)
+   -4..-1   Packet size (u32 LE) — UNRELIABLE in Y11S1: zero across 106 K packets
     0.. 3   Pattern [60 73 85 FE]
     4.. 5   Type field (u16 LE, bitfield)
     6+       Payload
 ```
+
+The earlier doc claimed entity ref at `-16..-13`. That was a misread — the correct offset for Y11S1 is `-12..-9`. Older binaries may differ.
 
 **Type field bits**:
 - Bit 7 of byte[0] (`& 0x80`): position data present (3× f32 XYZ at payload start)

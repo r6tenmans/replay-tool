@@ -28,13 +28,18 @@ type internalTrack struct {
 // ExtractEntityPositions scans the decompressed binary for SPAWN and FC-UPDATE
 // position packets using the pattern 60 73 85 FE (archetype 0xFE857360).
 //
-// Packet layout:
+// Packet layout (Y11S1 verified):
 //
-//	-16..-13: entity ref (LE u32)
-//	 -8..-5:  packet size (LE u32)
+//	-12..-9:  entity ref (LE u32, network object ID with 0xF0xx upper bytes)
+//	 -8..-5:  flags (usually 0)
+//	 -4..-1:  packet size (LE u32) — UNRELIABLE in Y11S1 (always 0 across 106k packets)
 //	  0.. 3:  pattern [60 73 85 FE]
 //	  4.. 5:  type field (2 bytes)
 //	  6+:     payload (XYZ if bit 7 of type[0] is set)
+//
+// Note: the legacy comment claimed entity ref at -16..-13 — this was wrong for Y11S1.
+// The dissect library reads from startOffset-16 where startOffset = patternStart+4,
+// which is patternStart-12. Old binaries may differ.
 func ExtractEntityPositions(data []byte) []*internalTrack {
 	if len(data) < 100 {
 		return nil
