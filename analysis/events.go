@@ -420,12 +420,20 @@ func ClassifyEntities(tracks []*internalTrack, counters map[uint32]uint32,
 		switch counter {
 		case 154: // drone
 			// Will be classified as "drone" in SplitTracks
-		case 146: // gadget
+		case 146: // gadget (deployed)
+			tr.IsGadget = true
+		case 142: // secondary gadget (impact grenade, prox alarm, ...)
+			tr.IsGadget = true
+		case 126: // Alibi Prisma
+			tr.IsGadget = true
+		case 150: // Deployable Shield
 			tr.IsGadget = true
 		case 130: // barricade
 			tr.IsBarricade = true
 			tr.BarricadeType = "barricade"
-		case 138, 254: // weapon
+		case 138: // ambiguous: primary-weapon-drop OR Azami Kiba Barrier — disambiguated by SPAWN hash at +60
+			tr.IsWeapon = true
+		case 254: // secondary weapon drop
 			tr.IsWeapon = true
 		}
 	}

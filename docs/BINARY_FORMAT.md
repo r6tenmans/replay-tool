@@ -52,10 +52,55 @@ The earlier doc claimed entity ref at `-16..-13`. That was a misread — the cor
 **Counter values**:
 - 494: player entity assignment record
 - 154: drone
-- 146: gadget
+- 146: gadget (deployed) — see hash-pair table below for sub-type
+- 142: secondary gadget (impact grenade, prox alarm, ...) — see +60 hash table below
 - 130: barricade (confirmed with FC-UPDATE flag `0x1FE0`)
-- 138: primary weapon
+- 138: primary weapon OR Azami Kiba Barrier — disambiguated by +60 hash
 - 254: secondary weapon
+- 150: Deployable Shield (confirmed by +60 hash `0x1CA56E9A`)
+- 126: Alibi Prisma (hash at +56)
+
+**Note on Y11S1**: the counter byte at +8 reads as 0 across **372 of 372** SPAWN
+matches in Y11S1 binaries. The counter-gating path used by older readers is
+unreliable in Y11+; the SPAWN-hash table below (at +60 / +64 from the
+archetype) gives counter-independent gadget identification.
+
+### SPAWN Gadget Identification (+60 / +64 from archetype)
+
+| Counter | hashA @+60 | hashB @+64 | Gadget |
+|---------|------------|------------|--------|
+| 142 | `0x2D1E3A9A` |  | Mute Jammer |
+| 142 | `0x2D1AAB9A` |  | Frost Welcome Mat |
+| 142 | `0xD2F8F39A` |  | Bandit Battery |
+| 142 | `0xFC72B39A` |  | Goyo Canister |
+| 142 | `0x2D1E3B16` |  | Nitro Cell |
+| 146 | `0x133B519A` | `0x0CC9B9B2` | Thunderbird Kóna Station |
+| 146 | `0x133B519A` | `0x4F01B6B2` | Melusi Banshee |
+| 146 | `0x133B519A` | `0x2D1C4FB2` | Jäger ADS |
+| 146 | `0x1CA56E9A` | `0x2D1DAE35` | Mira Black Mirror |
+| 138 | `0x9B72AE9A` |  | Azami Kiba Barrier |
+| 150 | `0x1CA56E9A` |  | Deployable Shield |
+| 126 | hash @+56: `0x45324600` |  | Alibi Prisma |
+
+Resolved gadget name is exposed as `entities[].spawnGadgetName` in the JSON output.
+
+### Gadget Inventory Counts
+
+Late-file inventory records carry per-gadget primary/secondary counts:
+
+```
+[0x22 marker] [hash u32 LE] [0x04 type byte] [count u32 LE]
+```
+
+| Hash | Field |
+|------|-------|
+| `0x4FBDD114` | Primary gadget count |
+| `0x44186B66` | Secondary gadget count |
+
+Entity attribution: scan backward up to 128 bytes for a `0x22` or `0x23` marker
+followed by an F0-prefix uint32 — that's the WEAPON / GADGET entity ref (not
+the player entity ref directly; resolve via library `Loadouts.Primary/.Secondary`
+entity refs). Exposed as `analysis.gadgetInventory[]` in JSON output.
 
 ## Bone Data
 
@@ -91,6 +136,17 @@ and BMB (`00 2C 36 14 9B`) match the 36-byte `[xyz][1.0][quat][1.0]` payload
 shape. Other body parts (arms, legs, feet, hands) are not stored in replay
 files; they are reconstructed at playback time via inverse kinematics from
 head + chest + position state.
+
+### Two Bone Extraction Implementations
+
+| Aspect | `dissect/movement.go` (streaming) | `analysis/bone.go` (batch) |
+|--------|-----------------------------------|----------------------------|
+| Trigger | Inline after each FC-UPDATE packet | Post-hoc full-buffer pass |
+| Attach to | The just-appended PositionUpdate | Nearest position frame by binary offset |
+| Entity resolve | Implicit (last PU's entity) | Backward scan for `60 73 85 FE` → entity ref at `-12` |
+| BMB window | 10 bytes after BMA Section A | Same: `[BMAstart+36, BMAstart+46]` |
+| Per-binary scan cost | O(packets) | O(bytes) for BMA hits + O(500) backward per hit |
+| Coverage on R06 (25 619 player frames) | n/a (library doesn't expose to analysis) | 87.6% per frame |
 
 ## Ammo Events
 
@@ -235,8 +291,16 @@ Values: `0.0` (dead), `100.0` (full), intermediates = damage taken.
 |------|---------|
 | `0x848F67CF` | Time-related float |
 | `0xF634093A` | Hit/tick counter |
-| `0x475BB68B` | Damage rate (0.067=DoT, 0.133=bullets) |
+| `0x475BB68B` | Damage rate — **decoded as hit type** |
 | `0xC2D846F8` | Max health (0 or 100) |
+
+**Damage-rate → hit-type decoding** (exposed as `healthUpdate.hitType`):
+
+| Damage rate value | Decoded `hitType` |
+|-------------------|-------------------|
+| `0.067` (±0.005) | `"dot"` — gas/poison/bleed tick |
+| `0.133` (±0.005) | `"bullet"` — direct firearm hit |
+| other | `""` — unknown / not applicable |
 
 ## Scoreboard
 
@@ -276,6 +340,34 @@ per call with state derived from `r.planted` and `r.defuserDisabling`:
 
 Tick fields: `timeInSeconds`, `time` (mm:ss), `rawValue` (current timer), `prevValue` (previous timer), `state`.
 
+## FC-UPDATE Flag Fingerprints
+
+The 2-byte type code at `patternStart + 4` doubles as a behavioural classifier
+when accumulated across an entity's packet stream.
+
+| Flag | Meaning |
+|------|---------|
+| `0x0280` | Grapple line projectile |
+| `0x07C0` | Impact grenade (also appears in thrown set) |
+| `0x1FC0` | Impact init (first-flag-only) |
+| `0x0380` | Thrown projectile (one of three present) |
+| `0x3FC0` | Thrown projectile (final flag) |
+| `0x1FE0` | Barricade — confirms counter=130 entity |
+| `0x0440` | Property-only packet — used for gadget fingerprinting |
+| `0x03C0` | Pairs with 0x0440 size to discriminate Lesion vs Kaid |
+
+**Projectile sub-type classifier**: if an entity's flag set contains
+`{0x0380, 0x07C0, 0x3FC0}` → thrown projectile.
+If only `0x0280` → grapple. If `{0x1FC0, 0x07C0}` → impact grenade.
+
+**0x0440 packet-size discriminator** for Alibi / Lesion / Kaid:
+
+| 0x0440 dominant size | `0x03C0` present | Frame count | Identified |
+|----------------------|------------------|-------------|------------|
+| 24 | — | > 200 | Alibi Prisma |
+| 21 | yes | — | Lesion Gu Mine |
+| 21 | no | — | Kaid Rtila Electroclaw |
+
 ## Other Patterns
 
 | Pattern | Purpose |
@@ -285,3 +377,72 @@ Tick fields: `timeInSeconds`, `time` (mm:ss), `rawValue` (current timer), `prevV
 | `AF 98 99 CA` | Spawn point data |
 | `59 34 E5 8B 04` | Match feedback (kill/DBNO/death) |
 | `22 A9 C8 58 D9` | Defuser timer (per-frame tick) |
+
+---
+
+## Usage Recipes
+
+### Reconstruct Exact World-Space Aim Per Frame
+1. Read `frame.headQX/QY/QZ/QW` (head bone quat in body-local space)
+2. Read `frame.qx/qy/qz/qw` (body quat from `0x03xx` packet) — or reconstruct
+   from `frame.yawDeg / pitchDeg` using ZXY Euler if the body quat is zero
+3. `head_world = body_quat × head_local_quat` (Hamilton product)
+4. Extract yaw/pitch from `head_world` using the formulas in the bone section
+5. Result: pixel-level aim direction accounting for lean / nod / crouch
+
+### Build Per-Shot Bullet Direction Vector
+1. Each `libraryShots[i]` carries `headQX/QY/QZ/QW` at the moment of fire
+2. Compute `head_world` quat as above
+3. Rotate the game's forward axis (e.g. `(0, 1, 0)`) by `head_world` →
+   3D bullet direction vector from the shooter's eye
+
+### Correlate Kill → Shot
+1. Parse kill event → get attacker username + `timeSecs`
+2. Find the attacker's last `libraryShots[i]` with `timeSecs <= killTime`
+3. Shot carries `x/y/z` (shooter pos) + head quat (aim direction)
+4. Victim's `playerTrack.frames[nearest_time].x/y/z` = victim pos at death
+5. Result: full kill geometry — where the shot came from, which direction,
+   where the victim was
+
+### Geometrically Validate Headshot
+1. Compute shooter's world-space head aim (as above)
+2. Compute victim's head-world position:
+   ```
+   victimHead = victim.frames[t].xyz + rotate(victim.frame.headOffXYZ, victim.frame.bodyQuat)
+   ```
+3. Cast a ray from shooter eye along aim direction
+4. If the ray intersects a sphere of radius ~0.15m around `victimHead` →
+   geometric headshot
+5. Cross-validate with `binaryFeedback[].headshotByte` (`0x4EA45BC3`)
+
+### Track Entity Lifecycle (Drone / Gadget / Barricade)
+1. Parse SPAWN record → entity ref + counter
+2. Look up counter table to get type label
+3. Look up `+60` (and `+64` for counter-146) hash for specific gadget name
+4. Read every FC-UPDATE for that entity ref → full position history
+5. `entityTrack.healthEvents` → HP timeline; HP=0 → destruction event
+6. Final `entityTrack.spawnGadgetName` is the identified gadget
+
+### Classify Hit Type per Health Event
+1. `healthUpdate.damageRate` is the raw f32 from hash `0x475BB68B`
+2. Decoded `healthUpdate.hitType`:
+   - `"bullet"` (0.133 ±0.005) — direct firearm hit
+   - `"dot"` (0.067 ±0.005) — gas/poison/bleed tick
+   - `""` — unknown / no rate recorded
+3. Lets you separate Smoke gas / Lesion mines / bleeding from direct shots
+
+### Recover Recording Player POV
+1. Camera Pass 4 (`0xa5b2f3a5` signature) attributes all camera frames to the
+   player with the most position frames = the recording player
+2. `analysis.recordingPlayer` is the resolved player index
+3. `analysis.cameraFrames[]` gives exact look direction per tick — independent
+   of body rotation, so use it for FOV-accurate replay playback
+
+### Round Timeline (Elapsed from Tick Anchors)
+1. Timer ticks: pattern `1F 07 EF C9 04 [seconds u32 LE]` (countdown)
+2. Phase gap > 5 s between ticks = new phase (prep → action)
+3. `elapsed = phaseStartCountdown - currentCountdown`
+4. For events with `binOffset`: interpolate piecewise linearly between adjacent
+   tick anchors to get `elapsed`. Fall back to `roundDuration - countdown` for
+   events whose offsets are outside the tick range (Y11S1 health stream lives
+   below the first tick anchor; see `AssignHealthTimes`)

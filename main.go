@@ -686,6 +686,10 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 				default:
 					output.Analysis.HealthUpdates[i].State = "alive"
 				}
+				// Decode damage rate → hit type (bullet vs DoT vs unknown).
+				if hitType := analysis.LabelDamageRate(output.Analysis.HealthUpdates[i].DamageRate); hitType != "" {
+					output.Analysis.HealthUpdates[i].HitType = hitType
+				}
 			}
 		}
 
@@ -730,6 +734,38 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 			// same-team player at spawn time. Must run after library reclassification
 			// because the binary scanner often labels these entities "unknown".
 			analysis.AssignBarricadeOwners(output.Analysis.Entities, output.Analysis.Players)
+
+			// Identify specific gadget per SPAWN entity by reading the hashes at
+			// +60/+64 from the archetype. Disambiguates Mute Jammer vs Frost
+			// Welcome Mat vs Bandit Battery (all counter 142), and the
+			// (counter 146) ADS family by hash-pair.
+			spawnCounters := analysis.ExtractSpawnCounters(rawData)
+			spawnGadgets := analysis.ExtractSpawnGadgetHashes(rawData, spawnCounters)
+			if len(spawnGadgets) > 0 {
+				for i := range output.Analysis.Entities {
+					if name, ok := spawnGadgets[output.Analysis.Entities[i].EntityID]; ok {
+						output.Analysis.Entities[i].SpawnGadgetName = name
+					}
+				}
+			}
+
+			// Per-player primary/secondary gadget count from inventory records.
+			// Records reference WEAPON entity refs (not player entities) — enrich
+			// the entity-to-player map with each player's primary/secondary weapon
+			// entity refs from the library's Loadouts table.
+			invMap := make(map[uint32]int, len(entityToPlayer)+2*len(reader.Loadouts))
+			for k, v := range entityToPlayer {
+				invMap[k] = v
+			}
+			for _, l := range reader.Loadouts {
+				if l.Primary != nil {
+					invMap[l.Primary.EntityRef] = l.PlayerIndex
+				}
+				if l.Secondary != nil {
+					invMap[l.Secondary.EntityRef] = l.PlayerIndex
+				}
+			}
+			output.Analysis.GadgetInventory = analysis.ExtractGadgetInventory(rawData, invMap)
 			// Rebuild destruction events from TrackedEntities.HealthEvents. The library's
 			// scanner properly attributes health events to entities via entity-ref proximity.
 			// The binary scanner in our analysis pipeline produces many false positives

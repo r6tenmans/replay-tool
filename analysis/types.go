@@ -64,6 +64,8 @@ type RoundAnalysis struct {
 	Outcome *RoundOutcome `json:"outcome,omitempty"`
 	// Per-shot damage estimates (when shot correlates with health change)
 	ShotDamages []ShotDamage `json:"shotDamages,omitempty"`
+	// Per-player primary/secondary gadget counts from inventory records (last 40% of file)
+	GadgetInventory []GadgetInventory `json:"gadgetInventory,omitempty"`
 	// Recording player index
 	RecordingPlayer int `json:"recordingPlayer"`
 	// Round duration in seconds
@@ -215,6 +217,7 @@ type EntityTrack struct {
 	EntityHex      string        `json:"entityHex"`
 	Type           string        `json:"type"` // "drone", "camera", "gadget", "projectile", "barricade", "weapon"
 	GadgetType     string        `json:"gadgetType,omitempty"`
+	SpawnGadgetName string       `json:"spawnGadgetName,omitempty"` // specific gadget identified from SPAWN hash at +60/+64 (e.g. "Mute Jammer", "Frost Welcome Mat")
 	ProjectileType string        `json:"projectileType,omitempty"`
 	BarricadeType  string        `json:"barricadeType,omitempty"`
 	OwnerLabel     string        `json:"ownerLabel,omitempty"`
@@ -332,6 +335,7 @@ type HealthUpdate struct {
 	PlayerIndex int     `json:"playerIndex"`
 	Health      float32 `json:"health"`
 	State       string  `json:"state,omitempty"`     // "alive" (>=5), "dbno" (0<hp<5, bleeding-out fraction), "dead" (=0)
+	HitType     string  `json:"hitType,omitempty"`   // decoded from damageRate: "bullet" (0.133), "dot" (0.067), "" otherwise
 	EntityRef   uint32  `json:"entityRef,omitempty"` // non-zero for non-player entity health events
 	TimeSecs    float32 `json:"timeSecs,omitempty"`
 	BinOffset   int     `json:"binOffset"`
