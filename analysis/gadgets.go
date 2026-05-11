@@ -62,6 +62,22 @@ var counter126Gadgets = map[uint32]string{
 	0x45324600: "Alibi Prisma",
 }
 
+// Counter-154 (drone) hashA values. PR #7 — 0xF6E54772 covers 98.9 % of drones
+// across 79 R06 replays; treat as the universal attacker drone signature.
+var counter154Drones = map[uint32]string{
+	0xF6E54772: "Drone",
+	0x1CA56E9A: "Shock Drone", // probable Twitch family (shared with Mira/shield)
+}
+
+// Counters 98 / 266 are projectile / VFX phases (PR #7). The dominant hashA is
+// 0xA9CE56F7 (~99% of both counters) — treat any counter-98/266 entity as a
+// "vfx" projectile by default.
+const projectileVfxHash uint32 = 0xA9CE56F7
+
+var counter98Projectiles = map[uint32]string{
+	projectileVfxHash: "vfx-projectile",
+}
+
 // allGadgetHashesA is the union of every known +60-offset gadget hash across
 // all counter values. Used in the counter-independent scan path.
 var allGadgetHashesA = func() map[uint32]string {
@@ -78,8 +94,46 @@ var allGadgetHashesA = func() map[uint32]string {
 	for h, n := range counter126Gadgets {
 		out[h] = n
 	}
+	for h, n := range counter154Drones {
+		out[h] = n
+	}
+	for h, n := range counter98Projectiles {
+		out[h] = n
+	}
 	return out
 }()
+
+// ExtractSpawnHashA walks every SPAWN record and returns a map of entity ref
+// to the raw 32-bit hashA at offset +60. Provides downstream consumers with
+// the raw spawn-identifier independent of any name-lookup table — useful
+// when SpawnGadgetName isn't resolved.
+//
+// Skips entities whose hashA reads as zero (template / non-bearing SPAWN records).
+func ExtractSpawnHashA(data []byte) map[uint32]uint32 {
+	result := make(map[uint32]uint32)
+	if len(data) < 100 {
+		return result
+	}
+	pat := []byte{0x61, 0x73, 0x85, 0xFE}
+	for i := 16; i+spawnHashBOffset < len(data); i++ {
+		if data[i] != pat[0] || data[i+1] != pat[1] || data[i+2] != pat[2] || data[i+3] != pat[3] {
+			continue
+		}
+		entityRef := binary.LittleEndian.Uint32(data[i-12 : i-8])
+		if entityRef == 0 {
+			continue
+		}
+		if _, already := result[entityRef]; already {
+			continue
+		}
+		h := binary.LittleEndian.Uint32(data[i+spawnHashAOffset : i+spawnHashAOffset+4])
+		if h == 0 {
+			continue
+		}
+		result[entityRef] = h
+	}
+	return result
+}
 
 // ExtractSpawnGadgetHashes walks the binary for documented gadget-identifying
 // hashes and attributes each one to the nearest preceding SPAWN archetype's

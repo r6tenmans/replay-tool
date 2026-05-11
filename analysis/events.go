@@ -3,6 +3,7 @@ package analysis
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"sort"
 )
 
@@ -26,6 +27,16 @@ const (
 	// Decoded extra hashes (R06 analysis):
 	kHashWeaponID     uint32 = 0x65DD6CF8 // u64 session-variable ID of killing weapon
 	kHashHeadshotByte uint32 = 0x4EA45BC3 // u8, corroborates byte-offset headshot detection
+	// PR #5 — 4 new kill TLVs:
+	kHashRoundTimeMs uint32 = 0x6C463718 // u32 ms since round start
+	kHashKillDamage  uint32 = 0xC9527BDD // f32 in [0,1] — damage of killing bullet / max-health
+	kHashKillRange   uint32 = 0xFB9DBF08 // f32 in [0,1] — weapon-dependent range / falloff factor
+	kHashHitZone     uint32 = 0xA5F688E7 // u32 enum 0/1/2/3/4 — body-part hit bucket
+	// PR #4 — TLVs merged from duplicate sub-stream kill records:
+	kHashSubstreamFlag uint32 = 0x2219EC10 // u8=1 marker, present only on duplicate kill records
+	kHashExtraEnumA    uint32 = 0xEDB81094 // u32, observed values 0..4
+	kHashExtraEnumB    uint32 = 0x694D0B82 // u32, observed values 0..3
+	kHashExtraEnumC    uint32 = 0xC470472F // u32, observed values 2..5
 )
 
 // fillExtendedKillTLVs scans the area around a kill marker for the seven extended
@@ -45,6 +56,8 @@ func fillExtendedKillTLVs(data []byte, killOff, window int, ev *BinaryMatchEvent
 	// Keep the first match per hash (closer to the kill marker = more likely the right one).
 	var have struct {
 		w, f, e1, e2, e3, e4, e5, wid, hsb bool
+		// PR #5 — 4 new kill TLVs:
+		rtm, kd, kr, hz bool
 	}
 	for j := start; j+9 < end; j++ {
 		if data[j] != 0x22 && data[j] != 0x23 {
@@ -98,6 +111,51 @@ func fillExtendedKillTLVs(data []byte, killOff, window int, ev *BinaryMatchEvent
 				ev.HeadshotByte = data[j+6]
 				have.hsb = true
 			}
+		case kHashRoundTimeMs:
+			if !have.rtm && typeByte == 0x04 && j+10 <= len(data) {
+				v := binary.LittleEndian.Uint32(data[j+6 : j+10])
+				if v > 0 {
+					ev.RoundTimeMs = v
+					have.rtm = true
+				}
+			}
+		case kHashKillDamage:
+			if !have.kd && typeByte == 0x04 && j+10 <= len(data) {
+				v := binary.LittleEndian.Uint32(data[j+6 : j+10])
+				if v > 0 {
+					ev.KillDamage = math.Float32frombits(v)
+					have.kd = true
+				}
+			}
+		case kHashKillRange:
+			if !have.kr && typeByte == 0x04 && j+10 <= len(data) {
+				v := binary.LittleEndian.Uint32(data[j+6 : j+10])
+				if v > 0 {
+					ev.KillRange = math.Float32frombits(v)
+					have.kr = true
+				}
+			}
+		case kHashHitZone:
+			if !have.hz && typeByte == 0x04 && j+10 <= len(data) {
+				ev.HitZone = binary.LittleEndian.Uint32(data[j+6 : j+10])
+				have.hz = true
+			}
+		case kHashSubstreamFlag:
+			if typeByte == 0x01 && j+7 <= len(data) {
+				ev.SubstreamFlag = data[j+6]
+			}
+		case kHashExtraEnumA:
+			if ev.ExtraEnumA == 0 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.ExtraEnumA = binary.LittleEndian.Uint32(data[j+6 : j+10])
+			}
+		case kHashExtraEnumB:
+			if ev.ExtraEnumB == 0 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.ExtraEnumB = binary.LittleEndian.Uint32(data[j+6 : j+10])
+			}
+		case kHashExtraEnumC:
+			if ev.ExtraEnumC == 0 && typeByte == 0x04 && j+10 <= len(data) {
+				ev.ExtraEnumC = binary.LittleEndian.Uint32(data[j+6 : j+10])
+			}
 		}
 	}
 	// Compute decoded team fields (KillEnum3 = AttackerTeam+1, KillEnum4 = VictimTeam+1).
@@ -117,7 +175,11 @@ func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32
 	type eventKey struct {
 		typ, attacker, target string
 	}
-	seen := make(map[eventKey]bool)
+	// PR #4: don't skip duplicate kill records — they live in a parallel sub-stream
+	// that carries EXTRA TLVs (substreamFlag, extraEnumA/B/C, etc.). Track the
+	// index of the first event per key so we can merge subsequent occurrences
+	// into it via fillExtendedKillTLVs.
+	eventIdxByKey := make(map[eventKey]int)
 	var events []BinaryMatchEvent
 
 	for i := 0; i+5 < len(data); i++ {
@@ -192,28 +254,35 @@ func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32
 		}
 
 		key := eventKey{evType, attacker, target}
-		if seen[key] {
-			continue
+		// PR #4: if this kill key was already recorded, MERGE the new TLV data
+		// from this sub-stream occurrence into the existing event (instead of
+		// dropping it). The duplicate records carry extra TLVs not present in
+		// the first occurrence.
+		if idx, exists := eventIdxByKey[key]; exists {
+			fillExtendedKillTLVs(data, i, dbnoWindowBytes, &events[idx])
+			// Also fall through to DBNO emission if applicable below
+		} else {
+			t := tickOffsetToElapsed(int64(i), ticks, totalDuration)
+			ev := BinaryMatchEvent{
+				Offset:   int64(i),
+				Type:     evType,
+				Attacker: attacker,
+				Target:   target,
+				Headshot: headshot,
+				TimeSecs: t,
+			}
+			fillExtendedKillTLVs(data, i, dbnoWindowBytes, &ev)
+			events = append(events, ev)
+			eventIdxByKey[key] = len(events) - 1
 		}
-		seen[key] = true
 
-		t := tickOffsetToElapsed(int64(i), ticks, totalDuration)
-		ev := BinaryMatchEvent{
-			Offset:   int64(i),
-			Type:     evType,
-			Attacker: attacker,
-			Target:   target,
-			Headshot: headshot,
-			TimeSecs: t,
-		}
-		fillExtendedKillTLVs(data, i, dbnoWindowBytes, &ev)
-		events = append(events, ev)
-
-		// Emit separate DBNO event
+		// Emit separate DBNO event (also subject to the merge-vs-emit logic).
 		if isDBNO {
 			dbnoKey := eventKey{"dbno", attacker, target}
-			if !seen[dbnoKey] {
-				seen[dbnoKey] = true
+			if idx, exists := eventIdxByKey[dbnoKey]; exists {
+				fillExtendedKillTLVs(data, i, dbnoWindowBytes, &events[idx])
+			} else {
+				t := tickOffsetToElapsed(int64(i), ticks, totalDuration)
 				dbnoEv := BinaryMatchEvent{
 					Offset:   int64(i),
 					Type:     "dbno",
@@ -224,6 +293,7 @@ func ExtractBinaryFeedback(data []byte, ticks []TimerTick, totalDuration float32
 				}
 				fillExtendedKillTLVs(data, i, dbnoWindowBytes, &dbnoEv)
 				events = append(events, dbnoEv)
+				eventIdxByKey[dbnoKey] = len(events) - 1
 			}
 		}
 	}
@@ -385,7 +455,18 @@ func MapPlayersFromInitBlocks(data []byte, numPlayers int) map[uint32]int {
 }
 
 // ExtractSpawnCounters reads entity SPAWN counter values.
-// Pattern: archetype 0xFE857361, counter u16 at +8.
+// Pattern: archetype 0xFE857361.
+//
+// Packet layout (corrected, per PR #6 observed across 79 R06 replays):
+//
+//	-12..-9  entity ref low 32b (u32 LE)
+//	 -8..-5  entity ref high 32b — always 0
+//	 -4..-1  counter (u32 LE) ← THE counter field
+//	  0.. 3  pattern [61 73 85 FE]
+//	  4.. 7  echo of entity ref low 32b
+//	  8..11  always 0 (was misread as u16 counter previously)
+//	 +60..+63 hashA — gadget/sub-type id
+//	 +64..+67 hashB — paired with hashA on some counter-146 entities
 func ExtractSpawnCounters(data []byte) map[uint32]uint32 {
 	result := make(map[uint32]uint32)
 	pat := []byte{0x61, 0x73, 0x85, 0xFE}
@@ -395,9 +476,11 @@ func ExtractSpawnCounters(data []byte) map[uint32]uint32 {
 			continue
 		}
 		entityRef := binary.LittleEndian.Uint32(data[i-12 : i-8])
-		counter := uint16(data[i+8]) | uint16(data[i+9])<<8
+		// Counter is u32 LE at i-4..i — NOT u16 at i+8 (those bytes are
+		// the high 16b of the entity-ref echo and are always 0).
+		counter := binary.LittleEndian.Uint32(data[i-4 : i])
 		if _, exists := result[entityRef]; !exists {
-			result[entityRef] = uint32(counter)
+			result[entityRef] = counter
 		}
 	}
 
@@ -435,6 +518,9 @@ func ClassifyEntities(tracks []*internalTrack, counters map[uint32]uint32,
 			tr.IsWeapon = true
 		case 254: // secondary weapon drop
 			tr.IsWeapon = true
+		case 98, 266: // projectile / VFX (PR #7) — paired phases of the same projectile
+			tr.IsProjectile = true
+			tr.ProjectileType = "vfx"
 		}
 	}
 }

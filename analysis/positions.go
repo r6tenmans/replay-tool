@@ -21,6 +21,7 @@ type internalTrack struct {
 	BarricadeType  string
 	OwnerLabel     string
 	SpawnCounter   uint32
+	SpawnHashA     uint32 // raw hashA at +60 from SPAWN archetype — surfaced for downstream consumers (PR #7)
 	HealthEvents   []HealthEvent
 	Frames         []PosFrame
 }
@@ -452,6 +453,7 @@ func SplitTracks(tracks []*internalTrack, entityToPlayer map[uint32]int, players
 				OwnerLabel:     tr.OwnerLabel,
 				TeamIndex:      tr.TeamIndex,
 				SpawnCounter:   tr.SpawnCounter,
+				SpawnHashA:     tr.SpawnHashA,
 				HealthEvents:   tr.HealthEvents,
 				Frames:         tr.Frames,
 			}

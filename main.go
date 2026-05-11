@@ -738,14 +738,19 @@ func buildOutput(reader *dissect.Reader, rawData []byte, headerOnly bool) FullOu
 			// Identify specific gadget per SPAWN entity by reading the hashes at
 			// +60/+64 from the archetype. Disambiguates Mute Jammer vs Frost
 			// Welcome Mat vs Bandit Battery (all counter 142), and the
-			// (counter 146) ADS family by hash-pair.
+			// (counter 146) ADS family by hash-pair. Also surfaces the raw
+			// SpawnHashA so consumers can identify entities for which we
+			// don't yet have a name mapping (PR #7).
 			spawnCounters := analysis.ExtractSpawnCounters(rawData)
 			spawnGadgets := analysis.ExtractSpawnGadgetHashes(rawData, spawnCounters)
-			if len(spawnGadgets) > 0 {
-				for i := range output.Analysis.Entities {
-					if name, ok := spawnGadgets[output.Analysis.Entities[i].EntityID]; ok {
-						output.Analysis.Entities[i].SpawnGadgetName = name
-					}
+			spawnHashAs := analysis.ExtractSpawnHashA(rawData)
+			for i := range output.Analysis.Entities {
+				eid := output.Analysis.Entities[i].EntityID
+				if name, ok := spawnGadgets[eid]; ok {
+					output.Analysis.Entities[i].SpawnGadgetName = name
+				}
+				if h, ok := spawnHashAs[eid]; ok {
+					output.Analysis.Entities[i].SpawnHashA = h
 				}
 			}
 

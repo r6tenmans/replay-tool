@@ -218,6 +218,7 @@ type EntityTrack struct {
 	Type           string        `json:"type"` // "drone", "camera", "gadget", "projectile", "barricade", "weapon"
 	GadgetType     string        `json:"gadgetType,omitempty"`
 	SpawnGadgetName string       `json:"spawnGadgetName,omitempty"` // specific gadget identified from SPAWN hash at +60/+64 (e.g. "Mute Jammer", "Frost Welcome Mat")
+	SpawnHashA     uint32        `json:"spawnHashA,omitempty"`      // raw hashA at +60 from SPAWN archetype (PR #7) — useful for downstream classification when SpawnGadgetName isn't resolved
 	ProjectileType string        `json:"projectileType,omitempty"`
 	BarricadeType  string        `json:"barricadeType,omitempty"`
 	OwnerLabel     string        `json:"ownerLabel,omitempty"`
@@ -394,6 +395,16 @@ type BinaryMatchEvent struct {
 	VictimTeam     int    `json:"victimTeam,omitempty"`      // KillEnum4 - 1
 	WeaponID       uint64 `json:"weaponId,omitempty"`        // hash 0x65DD6CF8 — session-variable ID of killing weapon
 	HeadshotByte   uint8  `json:"headshotByte,omitempty"`    // hash 0x4EA45BC3 — corroborating HS flag
+	// PR #5 — 4 new kill TLVs decoded from the sub-stream:
+	RoundTimeMs uint32  `json:"roundTimeMs,omitempty"` // hash 0x6C463718 — ms since round start
+	KillDamage  float32 `json:"killDamage,omitempty"`  // hash 0xC9527BDD — damage of killing bullet / max-health (0..1)
+	KillRange   float32 `json:"killRange,omitempty"`   // hash 0xFB9DBF08 — weapon-dependent range / falloff factor (0..1)
+	HitZone     uint32  `json:"hitZone,omitempty"`     // hash 0xA5F688E7 — body-part hit bucket (0/1/2/3/4)
+	// PR #4 — TLVs merged from duplicate sub-stream kill records:
+	SubstreamFlag uint8  `json:"substreamFlag,omitempty"` // hash 0x2219EC10 — u8=1 marker, present on duplicate (sub-stream) records
+	ExtraEnumA    uint32 `json:"extraEnumA,omitempty"`    // hash 0xEDB81094 — observed 0..4
+	ExtraEnumB    uint32 `json:"extraEnumB,omitempty"`    // hash 0x694D0B82 — observed 0..3
+	ExtraEnumC    uint32 `json:"extraEnumC,omitempty"`    // hash 0xC470472F — observed 2..5
 }
 
 // LibraryCameraFrame is a camera look-direction sample from the dissect library.
