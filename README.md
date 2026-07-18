@@ -116,6 +116,102 @@ r6-replay-tool -o analysis.json match-R01.rec
 r6-replay-tool -header match-R01.rec
 ```
 
+Because `-api` currently defaults to `:8080`, pass an empty API value when using the direct file-analysis mode. API mode takes precedence whenever the port value is non-empty.
+
+### Command-Line Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-api <port>` | EmptyString | Run the web API on the specified TCP port. Both `8080` and `:8080` are accepted. |
+| `-swagger` | `true` | Enable the generated Swagger specification and interactive Swagger UI. Use `-swagger=false` to disable it. |
+| `-o <file>` | stdout | Write replay analysis JSON to a file. |
+| `-pretty` | `false` | Pretty-print JSON output. |
+| `-header` | `false` | Parse only replay header information, skipping the full binary analysis. |
+
+Go's flag parser accepts either one or two leading hyphens, so `-api 8080` and `--api 8080` are equivalent.
+
+## Web API
+
+The API exposes the full replay-tool analysis pipeline over HTTP. With the current defaults, running the executable starts the server on port 8080:
+
+```bash
+r6-replay-tool
+
+# Select another port
+r6-replay-tool --api 9000
+
+# Run the API without Swagger documentation
+r6-replay-tool --api 8080 --swagger=false
+```
+
+Uploaded files must use `multipart/form-data` with a form field named `file`.
+
+| Method | Path | Upload | Response |
+|--------|------|--------|----------|
+| `GET` | `/test` | None | Health response: `{"message":"Hello, World!"}` |
+| `POST` | `/round` | One `.rec` file | A complete `FullOutput` containing the header, analysis, loadouts, and defuser ticks. |
+| `POST` | `/replay` | ZIP archive of round files | An array containing each filename and either its complete analysis or a per-file error. |
+
+Analyze one round:
+
+```bash
+curl -X POST \
+  -F "file=@match-R01.rec" \
+  http://localhost:8080/round
+```
+
+Analyze every round in a replay ZIP archive:
+
+```bash
+curl -X POST \
+  -F "file=@match-replay.zip" \
+  http://localhost:8080/replay
+```
+
+Add `?trim=true` to either POST endpoint to reduce large responses. This keeps all other analysis results but returns `analysis.players[].frames`, `analysis.entities`, `analysis.cameraFrames`, `analysis.libraryShots`, and `analysis.libraryAmmoUpdates` as empty arrays:
+
+```bash
+curl -X POST \
+  -F "file=@match-R01.rec" \
+  "http://localhost:8080/round?trim=true"
+```
+
+The API permits cross-origin requests and supports `GET`, `POST`, `PUT`, and preflight `OPTIONS` requests through its CORS middleware.
+
+### Swagger Documentation
+
+When `-swagger` is enabled, the server exposes:
+
+| Resource | URL |
+|----------|-----|
+| Interactive Swagger UI | `http://localhost:8080/swagger/index.html` |
+| Generated Swagger JSON | `http://localhost:8080/swagger/doc.json` |
+
+The generated Swagger 2.0 artifacts are checked into the `docs/` directory:
+
+- `docs/docs.go` embeds the specification into the Go application.
+- `docs/swagger.json` is the JSON specification.
+- `docs/swagger.yaml` is the YAML specification.
+
+API documentation is generated from the Swag annotations in `api.go`. After changing a route, request parameter, response type, or annotation, regenerate all three files from the repository root:
+
+```bash
+go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+  -g api.go \
+  -o docs \
+  --parseDependency \
+  --parseInternal
+```
+
+Then format and verify the project:
+
+```bash
+gofmt -w main.go api.go
+go test ./...
+```
+
+The `--parseDependency` and `--parseInternal` options are required so the generator includes the complete nested `FullOutput` and `analysis.RoundAnalysis` schemas.
+
 ### RE Inspection Tools
 
 The `cmd/` directory contains binary inspection tools used for reverse engineering. Each is built and run independently:

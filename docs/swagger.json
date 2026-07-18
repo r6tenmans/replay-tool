@@ -1,0 +1,1709 @@
+{
+    "schemes": [
+        "http"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "Analyze Rainbow Six Siege replay rounds using replay-tool.",
+        "title": "Replay Tool API",
+        "contact": {},
+        "version": "1.0"
+    },
+    "basePath": "/",
+    "paths": {
+        "/replay": {
+            "post": {
+                "description": "Upload a ZIP archive containing replay round files and analyze every non-directory entry.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "replay"
+                ],
+                "summary": "Analyze a replay archive",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Replay ZIP archive",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Empty player frames, entities, camera frames, library shots, and library ammo updates to reduce response size",
+                        "name": "trim",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/main.APIRound"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/round": {
+            "post": {
+                "description": "Upload a Rainbow Six Siege .rec file and return the full replay-tool analysis.",
+                "consumes": [
+                    "multipart/form-data"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "replay"
+                ],
+                "summary": "Analyze one replay round",
+                "parameters": [
+                    {
+                        "type": "file",
+                        "description": "Replay round (.rec)",
+                        "name": "file",
+                        "in": "formData",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Empty player frames, entities, camera frames, library shots, and library ammo updates to reduce response size",
+                        "name": "trim",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/main.FullOutput"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/main.APIError"
+                        }
+                    }
+                }
+            }
+        },
+        "/test": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Test API availability",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "analysis.BinaryMatchEvent": {
+            "type": "object",
+            "properties": {
+                "attacker": {
+                    "type": "string"
+                },
+                "attackerTeam": {
+                    "description": "Decoded fields (computed from raw enums + extra hashes):",
+                    "type": "integer"
+                },
+                "extraEnumA": {
+                    "description": "hash 0xEDB81094 — observed 0..4",
+                    "type": "integer"
+                },
+                "extraEnumB": {
+                    "description": "hash 0x694D0B82 — observed 0..3",
+                    "type": "integer"
+                },
+                "extraEnumC": {
+                    "description": "hash 0xC470472F — observed 2..5",
+                    "type": "integer"
+                },
+                "headshot": {
+                    "type": "boolean"
+                },
+                "headshotByte": {
+                    "description": "hash 0x4EA45BC3 — corroborating HS flag",
+                    "type": "integer"
+                },
+                "hitZone": {
+                    "description": "hash 0xA5F688E7 — body-part hit bucket (0/1/2/3/4)",
+                    "type": "integer"
+                },
+                "killDamage": {
+                    "description": "hash 0xC9527BDD — damage of killing bullet / max-health (0..1)",
+                    "type": "number"
+                },
+                "killEnum1": {
+                    "description": "hash 0x5BC4BC84 — Y11S1+ ONLY value 2 appears (39% of Y11 kills); pre-Y11 always 1. Likely a Y11-introduced kill-metadata flag",
+                    "type": "integer"
+                },
+                "killEnum2": {
+                    "description": "hash 0x37BF3E90 — always 1 (event-type marker)",
+                    "type": "integer"
+                },
+                "killEnum3": {
+                    "description": "hash 0xD13DA88D — DECODED: AttackerTeam+1",
+                    "type": "integer"
+                },
+                "killEnum4": {
+                    "description": "hash 0x3187B853 — DECODED: VictimTeam+1",
+                    "type": "integer"
+                },
+                "killEnum5": {
+                    "description": "hash 0x0B64ADA5 — always 0 across 402 kills (reserved)",
+                    "type": "integer"
+                },
+                "killFlag1": {
+                    "description": "hash 0x8F0292B5 — always 0 across 402 kills (reserved)",
+                    "type": "integer"
+                },
+                "killRange": {
+                    "description": "hash 0xFB9DBF08 — weapon-dependent range / falloff factor (0..1)",
+                    "type": "number"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "roundTimeMs": {
+                    "description": "PR #5 — 4 new kill TLVs decoded from the sub-stream:",
+                    "type": "integer"
+                },
+                "substreamFlag": {
+                    "description": "PR #4 — TLVs merged from duplicate sub-stream kill records:",
+                    "type": "integer"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "type": {
+                    "description": "\"kill\", \"death\", \"dbno\"",
+                    "type": "string"
+                },
+                "victimTeam": {
+                    "description": "KillEnum4 - 1",
+                    "type": "integer"
+                },
+                "weaponEntRef64": {
+                    "description": "Extended TLV properties from kill/DBNO records (Y9S2+, scanned in 256-byte window).\nSemantics verified across 402 kills from 85 replays spanning Y9S1 → Y11S1_Alpha03.",
+                    "type": "integer"
+                },
+                "weaponId": {
+                    "description": "hash 0x65DD6CF8 — session-variable ID of killing weapon",
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.BombPlantInfo": {
+            "type": "object",
+            "properties": {
+                "planterIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "username": {
+                    "type": "string"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "z": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.BombSiteInfo": {
+            "type": "object",
+            "properties": {
+                "centerX": {
+                    "type": "number"
+                },
+                "centerY": {
+                    "type": "number"
+                },
+                "centerZ": {
+                    "type": "number"
+                },
+                "description": {
+                    "description": "human-readable site label",
+                    "type": "string"
+                },
+                "floor": {
+                    "description": "\"1F\", \"2F\", \"B\", etc. (from spawn metadata)",
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.DeathTimingEntry": {
+            "type": "object",
+            "properties": {
+                "lastMovementSeq": {
+                    "type": "integer"
+                },
+                "lastMovementTimeSec": {
+                    "description": "countdown seconds remaining (from game timer)",
+                    "type": "number"
+                },
+                "lastX": {
+                    "type": "number"
+                },
+                "lastY": {
+                    "type": "number"
+                },
+                "lastZ": {
+                    "type": "number"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.DestructionEvent": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "entityHex": {
+                    "type": "string"
+                },
+                "entityId": {
+                    "type": "integer"
+                },
+                "entityType": {
+                    "description": "\"drone\", \"barricade\", \"gadget\", \"projectile\", \"unknown\"",
+                    "type": "string"
+                },
+                "gadgetType": {
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.DroneEventEntry": {
+            "type": "object",
+            "properties": {
+                "connect": {
+                    "type": "boolean"
+                },
+                "droneRef": {
+                    "type": "integer"
+                },
+                "playerRef": {
+                    "type": "integer"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.EntityTrack": {
+            "type": "object",
+            "properties": {
+                "barricadeType": {
+                    "type": "string"
+                },
+                "entityHex": {
+                    "type": "string"
+                },
+                "entityId": {
+                    "type": "integer"
+                },
+                "frames": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.PosFrame"
+                    }
+                },
+                "gadgetType": {
+                    "type": "string"
+                },
+                "healthEvents": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.HealthEvent"
+                    }
+                },
+                "ownerDistance": {
+                    "description": "distance (m) from owner at spawn — confidence indicator",
+                    "type": "number"
+                },
+                "ownerLabel": {
+                    "type": "string"
+                },
+                "ownerPlayerIndex": {
+                    "description": "inferred owner for barricades / gadgets (nil if unknown — distinguishes \"no owner\" from playerIndex 0)",
+                    "type": "integer"
+                },
+                "projectileType": {
+                    "type": "string"
+                },
+                "spawnCounter": {
+                    "type": "integer"
+                },
+                "spawnGadgetName": {
+                    "description": "specific gadget identified from SPAWN hash at +60/+64 (e.g. \"Mute Jammer\", \"Frost Welcome Mat\")",
+                    "type": "string"
+                },
+                "spawnHashA": {
+                    "description": "raw hashA at +60 from SPAWN archetype (PR #7) — useful for downstream classification when SpawnGadgetName isn't resolved",
+                    "type": "integer"
+                },
+                "teamIndex": {
+                    "type": "integer"
+                },
+                "type": {
+                    "description": "\"drone\", \"camera\", \"gadget\", \"projectile\", \"barricade\", \"weapon\"",
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.EquipmentSwitchEvent": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "fromWeaponId": {
+                    "type": "integer"
+                },
+                "isPrimaryNow": {
+                    "type": "boolean"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "toWeaponId": {
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.GadgetInventory": {
+            "type": "object",
+            "properties": {
+                "entityRef": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "primaryCount": {
+                    "type": "integer"
+                },
+                "secondaryCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.GameAction": {
+            "type": "object",
+            "properties": {
+                "offset": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.GameEvent": {
+            "type": "object",
+            "properties": {
+                "headshot": {
+                    "type": "boolean"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "type": {
+                    "description": "\"kill\", \"death\", \"dbno\", \"action_start\", \"round_end\"",
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.HealthEvent": {
+            "type": "object",
+            "properties": {
+                "entityId": {
+                    "type": "integer"
+                },
+                "hp": {
+                    "type": "integer"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.HealthUpdate": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "damageRate": {
+                    "description": "hash 0x475BB68B",
+                    "type": "number"
+                },
+                "entityRef": {
+                    "description": "non-zero for non-player entity health events",
+                    "type": "integer"
+                },
+                "health": {
+                    "type": "number"
+                },
+                "healthTime": {
+                    "description": "hash 0x848F67CF",
+                    "type": "number"
+                },
+                "hitCounter": {
+                    "description": "hash 0xF634093A — running damage taken",
+                    "type": "number"
+                },
+                "hitType": {
+                    "description": "decoded from damageRate: \"bullet\" (0.133), \"dot\" (0.067), \"\" otherwise",
+                    "type": "string"
+                },
+                "maxHealth": {
+                    "description": "Co-located health sub-properties (extracted from 256-byte window around the hp hash):",
+                    "type": "number"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "state": {
+                    "description": "\"alive\" (\u003e=5), \"dbno\" (0\u003chp\u003c5, bleeding-out fraction), \"dead\" (=0)",
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.HitEvent": {
+            "type": "object",
+            "properties": {
+                "damage": {
+                    "description": "damage from health drop, if available",
+                    "type": "number"
+                },
+                "headshot": {
+                    "description": "matched a headshot kill",
+                    "type": "boolean"
+                },
+                "hitTimeSecs": {
+                    "type": "number"
+                },
+                "hpAfter": {
+                    "description": "target HP after this hit",
+                    "type": "number"
+                },
+                "isDBNO": {
+                    "description": "hit dropped HP into DBNO range",
+                    "type": "boolean"
+                },
+                "isKill": {
+                    "description": "hit dropped HP to 0",
+                    "type": "boolean"
+                },
+                "shooterIndex": {
+                    "type": "integer"
+                },
+                "shotTimeSecs": {
+                    "type": "number"
+                },
+                "shotX": {
+                    "type": "number"
+                },
+                "shotY": {
+                    "type": "number"
+                },
+                "shotZ": {
+                    "type": "number"
+                },
+                "victimIndex": {
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.LibraryAmmoUpdate": {
+            "type": "object",
+            "properties": {
+                "available": {
+                    "type": "integer"
+                },
+                "binOffset": {
+                    "type": "integer"
+                },
+                "capacity": {
+                    "type": "integer"
+                },
+                "hash1": {
+                    "description": "property hash (0x29C80A40 = \"available\", 0x3E6D5B6D = throwable count)",
+                    "type": "integer"
+                },
+                "hash2": {
+                    "description": "slot identifier (see slotTypeFromHash2)",
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.LibraryCameraFrame": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "pitchDeg": {
+                    "type": "number"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "qw": {
+                    "type": "number"
+                },
+                "qx": {
+                    "type": "number"
+                },
+                "qy": {
+                    "type": "number"
+                },
+                "qz": {
+                    "type": "number"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "yawDeg": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.LibraryGameAction": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.LibraryShotEntry": {
+            "type": "object",
+            "properties": {
+                "hqW": {
+                    "type": "number"
+                },
+                "hqX": {
+                    "type": "number"
+                },
+                "hqY": {
+                    "type": "number"
+                },
+                "hqZ": {
+                    "type": "number"
+                },
+                "pitch": {
+                    "type": "number"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "yaw": {
+                    "type": "number"
+                },
+                "z": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.LoadoutItem": {
+            "type": "object",
+            "properties": {
+                "auxHash": {
+                    "type": "integer"
+                },
+                "category": {
+                    "description": "10=weapon, 3=gadget, 22/24=operator",
+                    "type": "integer"
+                },
+                "gameId": {
+                    "type": "integer"
+                },
+                "maxCap": {
+                    "description": "observed max capacity from ammo updates",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "shotCount": {
+                    "description": "observed ammo decreases (=shots fired)",
+                    "type": "integer"
+                },
+                "slotType": {
+                    "description": "Real data from AmmoUpdates (populated post-analysis when available):",
+                    "type": "string"
+                },
+                "weaponRef": {
+                    "description": "entity ref of the weapon instance",
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.OperatorSwapEvent": {
+            "type": "object",
+            "properties": {
+                "fromOperator": {
+                    "type": "string"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "toOperator": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.PlayerLoadout": {
+            "type": "object",
+            "properties": {
+                "operatorId": {
+                    "type": "integer"
+                },
+                "operatorName": {
+                    "type": "string"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "primaryGadget": {
+                    "description": "PrimaryGadget is the operator's signature gadget (e.g., Bandit's SHOCK WIRE).\nRead from auxHash slot 0x1DA32C08 (slotOperatorGadget).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.LoadoutItem"
+                        }
+                    ]
+                },
+                "primaryWeapon": {
+                    "$ref": "#/definitions/analysis.LoadoutItem"
+                },
+                "reinforcement": {
+                    "description": "Reinforcement is the wall-reinforcement record for defenders (count is fixed by\ngame rules at 2/player, not loadout choice). Read from auxHash slot 0x9B559835.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.LoadoutItem"
+                        }
+                    ]
+                },
+                "secondaryGadget": {
+                    "description": "SecondaryGadget is the universal throwable / utility (e.g., NITRO CELL, FRAG GRENADE).\nRead from auxHash slot 0xAFB455D8 (slotSecondaryGadget).",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.LoadoutItem"
+                        }
+                    ]
+                },
+                "secondaryWeapon": {
+                    "$ref": "#/definitions/analysis.LoadoutItem"
+                }
+            }
+        },
+        "analysis.PlayerTrack": {
+            "type": "object",
+            "properties": {
+                "entityId": {
+                    "type": "integer"
+                },
+                "frames": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.PosFrame"
+                    }
+                },
+                "isAttacker": {
+                    "type": "boolean"
+                },
+                "killedAtSecs": {
+                    "type": "number"
+                },
+                "operator": {
+                    "type": "string"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "teamIndex": {
+                    "type": "integer"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.PlayerWeapons": {
+            "type": "object",
+            "properties": {
+                "allWeapons": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.WeaponAmmoInfo"
+                    }
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "primary": {
+                    "$ref": "#/definitions/analysis.WeaponAmmoInfo"
+                },
+                "secondary": {
+                    "$ref": "#/definitions/analysis.WeaponAmmoInfo"
+                }
+            }
+        },
+        "analysis.PosFrame": {
+            "type": "object",
+            "properties": {
+                "coX": {
+                    "description": "Bone data (chest)",
+                    "type": "number"
+                },
+                "coY": {
+                    "type": "number"
+                },
+                "coZ": {
+                    "type": "number"
+                },
+                "cqW": {
+                    "type": "number"
+                },
+                "cqX": {
+                    "type": "number"
+                },
+                "cqY": {
+                    "type": "number"
+                },
+                "cqZ": {
+                    "type": "number"
+                },
+                "entityId": {
+                    "type": "integer"
+                },
+                "headAimPitch": {
+                    "type": "number"
+                },
+                "headAimYaw": {
+                    "description": "World-space head aim (body_quat × head_bone_quat)",
+                    "type": "number"
+                },
+                "hoX": {
+                    "description": "Bone data (head)",
+                    "type": "number"
+                },
+                "hoY": {
+                    "type": "number"
+                },
+                "hoZ": {
+                    "type": "number"
+                },
+                "hqW": {
+                    "type": "number"
+                },
+                "hqX": {
+                    "type": "number"
+                },
+                "hqY": {
+                    "type": "number"
+                },
+                "hqZ": {
+                    "type": "number"
+                },
+                "isCamera": {
+                    "type": "boolean"
+                },
+                "offset": {
+                    "type": "integer"
+                },
+                "pitchDeg": {
+                    "type": "number"
+                },
+                "qw": {
+                    "type": "number"
+                },
+                "qx": {
+                    "type": "number"
+                },
+                "qy": {
+                    "type": "number"
+                },
+                "qz": {
+                    "type": "number"
+                },
+                "stance": {
+                    "description": "\"standing\", \"crouching\", \"prone\"",
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "yawDeg": {
+                    "type": "number"
+                },
+                "z": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.ReinforceEvent": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "username": {
+                    "type": "string"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "z": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.ReviveEvent": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.RoundAnalysis": {
+            "type": "object",
+            "properties": {
+                "binaryFeedback": {
+                    "description": "Kill/DBNO events parsed directly from binary",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.BinaryMatchEvent"
+                    }
+                },
+                "bombPlant": {
+                    "description": "Bomb plant location (XYZ where defuser was placed)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.BombPlantInfo"
+                        }
+                    ]
+                },
+                "bombSite": {
+                    "description": "Bomb site classification (A/B + side)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.BombSiteInfo"
+                        }
+                    ]
+                },
+                "cameraFrames": {
+                    "description": "Camera look-direction frames from the dissect library",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.LibraryCameraFrame"
+                    }
+                },
+                "deathTimings": {
+                    "description": "Last significant movement positions for players who died",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.DeathTimingEntry"
+                    }
+                },
+                "destructionEvents": {
+                    "description": "Destruction events (drone/gadget/barricade HP reached zero)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.DestructionEvent"
+                    }
+                },
+                "droneEvents": {
+                    "description": "Drone connect/disconnect lifecycle events",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.DroneEventEntry"
+                    }
+                },
+                "entities": {
+                    "description": "Non-player tracked entities (drones, cameras, gadgets, projectiles, barricades)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.EntityTrack"
+                    }
+                },
+                "equipmentSwitches": {
+                    "description": "Equipment switch events (player changed active weapon)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.EquipmentSwitchEvent"
+                    }
+                },
+                "gadgetInventory": {
+                    "description": "Per-player primary/secondary gadget counts from inventory records (last 40% of file)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.GadgetInventory"
+                    }
+                },
+                "gameActions": {
+                    "description": "Game actions (reinforce, gadget deploy) from binary scan",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.GameAction"
+                    }
+                },
+                "gameEvents": {
+                    "description": "Timed game events for visualization",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.GameEvent"
+                    }
+                },
+                "healthUpdates": {
+                    "description": "Health state changes per player",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.HealthUpdate"
+                    }
+                },
+                "hits": {
+                    "description": "Hit events: shots correlated with target health drops",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.HitEvent"
+                    }
+                },
+                "libraryAmmoUpdates": {
+                    "description": "Raw ammo state updates from the dissect library",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.LibraryAmmoUpdate"
+                    }
+                },
+                "libraryGameActions": {
+                    "description": "Game actions from the dissect library (more reliable for newer seasons)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.LibraryGameAction"
+                    }
+                },
+                "libraryShots": {
+                    "description": "Shot events reconstructed by the dissect library",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.LibraryShotEntry"
+                    }
+                },
+                "loadouts": {
+                    "description": "Per-player equipment loadout (weapon + gadget names)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.PlayerLoadout"
+                    }
+                },
+                "operatorSwaps": {
+                    "description": "Mid-round attacker operator swap events",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.OperatorSwapEvent"
+                    }
+                },
+                "outcome": {
+                    "description": "Round outcome (why the round ended)",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/analysis.RoundOutcome"
+                        }
+                    ]
+                },
+                "players": {
+                    "description": "Player entities with full position/rotation history",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.PlayerTrack"
+                    }
+                },
+                "recordingPlayer": {
+                    "description": "Recording player index",
+                    "type": "integer"
+                },
+                "reinforcements": {
+                    "description": "Reinforcement deploy events with position",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.ReinforceEvent"
+                    }
+                },
+                "reviveEvents": {
+                    "description": "Revive events (downed player brought back)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.ReviveEvent"
+                    }
+                },
+                "roundDuration": {
+                    "description": "Round duration in seconds",
+                    "type": "number"
+                },
+                "scoreUpdates": {
+                    "description": "Player score delta events (points earned per action)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.ScoreUpdateEvent"
+                    }
+                },
+                "shotDamages": {
+                    "description": "Per-shot damage estimates (when shot correlates with health change)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.ShotDamage"
+                    }
+                },
+                "shots": {
+                    "description": "Reconstructed shot events (position + aim at moment of fire)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.ShotEvent"
+                    }
+                },
+                "spectatorPeriods": {
+                    "description": "Spectator POV periods (recording-player camera target)",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.SpectatorPeriod"
+                    }
+                },
+                "timerPhases": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.TimerPhase"
+                    }
+                },
+                "timerTicks": {
+                    "description": "Timer ticks and round phases",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.TimerTick"
+                    }
+                },
+                "trades": {
+                    "description": "Trade kills: kill within trade-window of teammate's death",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/analysis.TradeKill"
+                    }
+                },
+                "weapons": {
+                    "description": "Per-player weapon/ammo tracking",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/analysis.PlayerWeapons"
+                    }
+                }
+            }
+        },
+        "analysis.RoundOutcome": {
+            "type": "object",
+            "properties": {
+                "attackersDead": {
+                    "type": "integer"
+                },
+                "defendersDead": {
+                    "type": "integer"
+                },
+                "defused": {
+                    "type": "boolean"
+                },
+                "planted": {
+                    "type": "boolean"
+                },
+                "winCondition": {
+                    "description": "\"KilledOpponents\", \"DefusedBomb\", \"DisabledDefuser\", \"Time\", \"PlantDetonation\"",
+                    "type": "string"
+                },
+                "winningRole": {
+                    "description": "\"Attack\" or \"Defense\"",
+                    "type": "string"
+                },
+                "winningTeam": {
+                    "description": "0 or 1, -1 if unknown",
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.ScoreUpdateEvent": {
+            "type": "object",
+            "properties": {
+                "binOffset": {
+                    "type": "integer"
+                },
+                "delta": {
+                    "type": "integer"
+                },
+                "newScore": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "prevScore": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.ShotDamage": {
+            "type": "object",
+            "properties": {
+                "damage": {
+                    "type": "number"
+                },
+                "isKill": {
+                    "type": "boolean"
+                },
+                "shooterIndex": {
+                    "type": "integer"
+                },
+                "shotTimeSecs": {
+                    "type": "number"
+                },
+                "victimIndex": {
+                    "type": "integer"
+                }
+            }
+        },
+        "analysis.ShotEvent": {
+            "type": "object",
+            "properties": {
+                "hqW": {
+                    "type": "number"
+                },
+                "hqX": {
+                    "type": "number"
+                },
+                "hqY": {
+                    "type": "number"
+                },
+                "hqZ": {
+                    "type": "number"
+                },
+                "pitchDeg": {
+                    "type": "number"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "seq": {
+                    "type": "integer"
+                },
+                "timeSecs": {
+                    "type": "number"
+                },
+                "x": {
+                    "type": "number"
+                },
+                "y": {
+                    "type": "number"
+                },
+                "yawDeg": {
+                    "type": "number"
+                },
+                "z": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.SpectatorPeriod": {
+            "type": "object",
+            "properties": {
+                "endSecs": {
+                    "type": "number"
+                },
+                "frameCount": {
+                    "type": "integer"
+                },
+                "startSecs": {
+                    "type": "number"
+                },
+                "targetIndex": {
+                    "type": "integer"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "analysis.TimerPhase": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "type": "number"
+                },
+                "endSec": {
+                    "type": "number"
+                },
+                "name": {
+                    "description": "\"prep\" or \"action\"",
+                    "type": "string"
+                },
+                "startSec": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.TimerTick": {
+            "type": "object",
+            "properties": {
+                "offset": {
+                    "type": "integer"
+                },
+                "seconds": {
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.TradeKill": {
+            "type": "object",
+            "properties": {
+                "tradedForIndex": {
+                    "description": "teammate who died",
+                    "type": "integer"
+                },
+                "tradedTimeSecs": {
+                    "type": "number"
+                },
+                "traderIndex": {
+                    "description": "player who got the trade kill",
+                    "type": "integer"
+                },
+                "traderTimeSecs": {
+                    "type": "number"
+                },
+                "victimIndex": {
+                    "description": "person the trader killed (also killed teammate)",
+                    "type": "integer"
+                },
+                "windowSecs": {
+                    "description": "time between teammate death and trade kill",
+                    "type": "number"
+                }
+            }
+        },
+        "analysis.WeaponAmmoInfo": {
+            "type": "object",
+            "properties": {
+                "finalAmmo": {
+                    "type": "integer"
+                },
+                "initialAmmo": {
+                    "type": "integer"
+                },
+                "isPrimary": {
+                    "type": "boolean"
+                },
+                "magazineSize": {
+                    "type": "integer"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "shotsFired": {
+                    "type": "integer"
+                },
+                "totalEvents": {
+                    "type": "integer"
+                },
+                "weaponCategory": {
+                    "type": "string"
+                },
+                "weaponEid": {
+                    "type": "integer"
+                },
+                "weaponName": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.APIError": {
+            "type": "object",
+            "properties": {
+                "context": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.APIRound": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "fileName": {
+                    "type": "string"
+                },
+                "round": {
+                    "$ref": "#/definitions/main.FullOutput"
+                }
+            }
+        },
+        "main.DefuserTickEntry": {
+            "type": "object",
+            "properties": {
+                "prevValue": {
+                    "type": "number"
+                },
+                "rawValue": {
+                    "type": "number"
+                },
+                "state": {
+                    "type": "string"
+                },
+                "time": {
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "type": "number"
+                }
+            }
+        },
+        "main.FeedbackInfo": {
+            "type": "object",
+            "properties": {
+                "dbnoBy": {
+                    "description": "who downed the target (if different from finisher)",
+                    "type": "string"
+                },
+                "finishedBy": {
+                    "description": "who finished the kill on a downed target",
+                    "type": "string"
+                },
+                "headshot": {
+                    "type": "boolean"
+                },
+                "target": {
+                    "type": "string"
+                },
+                "time": {
+                    "description": "mm:ss countdown string",
+                    "type": "string"
+                },
+                "timeSecs": {
+                    "description": "raw countdown seconds (TimeInSeconds)",
+                    "type": "number"
+                },
+                "type": {
+                    "type": "string"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.FullOutput": {
+            "type": "object",
+            "properties": {
+                "analysis": {
+                    "$ref": "#/definitions/analysis.RoundAnalysis"
+                },
+                "defuserTicks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.DefuserTickEntry"
+                    }
+                },
+                "header": {
+                    "$ref": "#/definitions/main.HeaderInfo"
+                },
+                "libraryLoadouts": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.LibraryLoadoutEntry"
+                    }
+                }
+            }
+        },
+        "main.HeaderInfo": {
+            "type": "object",
+            "properties": {
+                "gameMode": {
+                    "type": "string"
+                },
+                "gameVersion": {
+                    "type": "string"
+                },
+                "mapName": {
+                    "type": "string"
+                },
+                "matchFeedback": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.FeedbackInfo"
+                    }
+                },
+                "matchId": {
+                    "type": "string"
+                },
+                "players": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.PlayerInfoHeader"
+                    }
+                },
+                "roundNumber": {
+                    "type": "integer"
+                },
+                "scoreboard": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.ScoreboardEntry"
+                    }
+                },
+                "teams": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/main.TeamInfo"
+                    }
+                }
+            }
+        },
+        "main.LibraryGadgetCounts": {
+            "type": "object",
+            "properties": {
+                "hasPrimary": {
+                    "type": "boolean"
+                },
+                "hasSecondary": {
+                    "type": "boolean"
+                },
+                "primaryCount": {
+                    "type": "integer"
+                },
+                "secondaryCount": {
+                    "type": "integer"
+                }
+            }
+        },
+        "main.LibraryLoadoutEntry": {
+            "type": "object",
+            "properties": {
+                "gadgetLoadout": {
+                    "$ref": "#/definitions/main.LibraryGadgetCounts"
+                },
+                "playerIndex": {
+                    "type": "integer"
+                },
+                "primary": {
+                    "$ref": "#/definitions/main.LibraryWeaponInfo"
+                },
+                "secondary": {
+                    "$ref": "#/definitions/main.LibraryWeaponInfo"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.LibraryWeaponInfo": {
+            "type": "object",
+            "properties": {
+                "entityRef": {
+                    "type": "integer"
+                },
+                "hash1": {
+                    "type": "integer"
+                },
+                "hash2": {
+                    "type": "integer"
+                },
+                "initialCapacity": {
+                    "type": "integer"
+                },
+                "isPrimary": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "main.PlayerInfoHeader": {
+            "type": "object",
+            "properties": {
+                "initialOperator": {
+                    "type": "string"
+                },
+                "isAttack": {
+                    "type": "boolean"
+                },
+                "operator": {
+                    "type": "string"
+                },
+                "spawn": {
+                    "type": "string"
+                },
+                "teamIndex": {
+                    "type": "integer"
+                },
+                "username": {
+                    "type": "string"
+                }
+            }
+        },
+        "main.ScoreboardEntry": {
+            "type": "object",
+            "properties": {
+                "assists": {
+                    "type": "integer"
+                },
+                "assistsFromRound": {
+                    "type": "integer"
+                },
+                "playerId": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "integer"
+                }
+            }
+        },
+        "main.TeamInfo": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "role": {
+                    "type": "string"
+                },
+                "score": {
+                    "type": "integer"
+                },
+                "won": {
+                    "type": "boolean"
+                }
+            }
+        }
+    }
+}

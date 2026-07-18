@@ -9,6 +9,7 @@
 //	r6-replay-tool <file.rec>              # analyze and print JSON to stdout
 //	r6-replay-tool -o output.json file.rec # write to file
 //	r6-replay-tool -pretty file.rec        # pretty-printed JSON
+//	r6-replay-tool -api 8080 -swagger      # run API with Swagger UI
 package main
 
 import (
@@ -28,7 +29,17 @@ func main() {
 	outFile := flag.String("o", "", "Output JSON file (default: stdout)")
 	pretty := flag.Bool("pretty", false, "Pretty-print JSON output")
 	headerOnly := flag.Bool("header", false, "Only parse header info (fast)")
+	apiPort := flag.String("api", "", "Run the web API on the specified port (for example: 8080)")
+	swagger := flag.Bool("swagger", true, "Enable generated Swagger documentation and UI")
 	flag.Parse()
+
+	if *apiPort != "" {
+		if err := runAPI(*apiPort, *swagger); err != nil {
+			fmt.Fprintf(os.Stderr, "API server error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if flag.NArg() < 1 {
 		fmt.Fprintln(os.Stderr, "Usage: r6-replay-tool [flags] <file.rec>")

@@ -71,8 +71,15 @@ func (r *Reader) roundEnd() {
 		u := &r.MatchFeedback[i]
 		switch u.Type {
 		case Kill:
-			ti := r.Header.Players[r.PlayerIndexByUsername(u.Target)].TeamIndex
-			deaths[ti] = deaths[ti] + 1
+			targetIdx := r.PlayerIndexByUsername(u.Target)
+			if targetIdx >= 0 && targetIdx < len(r.Header.Players) {
+				ti := r.Header.Players[targetIdx].TeamIndex
+				deaths[ti] = deaths[ti] + 1
+			} else {
+				log.Warn().
+					Str("target", u.Target).
+					Msg("skipping kill death tally: target not found in header players")
+			}
 			// fix killer username
 			if len(u.usernameFromScoreboard) > 0 {
 				log.Debug().
@@ -84,8 +91,15 @@ func (r *Reader) roundEnd() {
 			}
 			break
 		case Death:
-			ti := r.Header.Players[r.PlayerIndexByUsername(u.Username)].TeamIndex
-			deaths[ti] = deaths[ti] + 1
+			playerIdx := r.PlayerIndexByUsername(u.Username)
+			if playerIdx >= 0 && playerIdx < len(r.Header.Players) {
+				ti := r.Header.Players[playerIdx].TeamIndex
+				deaths[ti] = deaths[ti] + 1
+			} else {
+				log.Warn().
+					Str("username", u.Username).
+					Msg("skipping death tally: player not found in header players")
+			}
 			break
 		case DefuserPlantComplete:
 			planter = r.PlayerIndexByUsername(u.Username)

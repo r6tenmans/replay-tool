@@ -8,7 +8,7 @@ type RoundAnalysis struct {
 	// Player entities with full position/rotation history
 	Players []PlayerTrack `json:"players"`
 	// Non-player tracked entities (drones, cameras, gadgets, projectiles, barricades)
-	Entities []EntityTrack `json:"entities,omitempty"`
+	Entities []EntityTrack `json:"entities"`
 	// Per-player weapon/ammo tracking
 	Weapons map[int]*PlayerWeapons `json:"weapons,omitempty"`
 	// Per-player equipment loadout (weapon + gadget names)
@@ -27,11 +27,11 @@ type RoundAnalysis struct {
 	// Game actions from the dissect library (more reliable for newer seasons)
 	LibraryGameActions []LibraryGameAction `json:"libraryGameActions,omitempty"`
 	// Camera look-direction frames from the dissect library
-	CameraFrames []LibraryCameraFrame `json:"cameraFrames,omitempty"`
+	CameraFrames []LibraryCameraFrame `json:"cameraFrames"`
 	// Shot events reconstructed by the dissect library
-	LibraryShots []LibraryShotEntry `json:"libraryShots,omitempty"`
+	LibraryShots []LibraryShotEntry `json:"libraryShots"`
 	// Raw ammo state updates from the dissect library
-	LibraryAmmoUpdates []LibraryAmmoUpdate `json:"libraryAmmoUpdates,omitempty"`
+	LibraryAmmoUpdates []LibraryAmmoUpdate `json:"libraryAmmoUpdates"`
 	// Mid-round attacker operator swap events
 	OperatorSwaps []OperatorSwapEvent `json:"operatorSwaps,omitempty"`
 	// Player score delta events (points earned per action)
@@ -80,11 +80,11 @@ type HitEvent struct {
 	VictimIndex  int     `json:"victimIndex"`
 	ShotTimeSecs float32 `json:"shotTimeSecs"`
 	HitTimeSecs  float32 `json:"hitTimeSecs"`
-	Damage       float32 `json:"damage,omitempty"`     // damage from health drop, if available
-	HpAfter      float32 `json:"hpAfter,omitempty"`    // target HP after this hit
-	IsKill       bool    `json:"isKill,omitempty"`     // hit dropped HP to 0
-	IsDBNO       bool    `json:"isDBNO,omitempty"`     // hit dropped HP into DBNO range
-	Headshot     bool    `json:"headshot,omitempty"`   // matched a headshot kill
+	Damage       float32 `json:"damage,omitempty"`   // damage from health drop, if available
+	HpAfter      float32 `json:"hpAfter,omitempty"`  // target HP after this hit
+	IsKill       bool    `json:"isKill,omitempty"`   // hit dropped HP to 0
+	IsDBNO       bool    `json:"isDBNO,omitempty"`   // hit dropped HP into DBNO range
+	Headshot     bool    `json:"headshot,omitempty"` // matched a headshot kill
 	ShotX        float32 `json:"shotX"`
 	ShotY        float32 `json:"shotY"`
 	ShotZ        float32 `json:"shotZ"`
@@ -92,12 +92,12 @@ type HitEvent struct {
 
 // TradeKill is a kill that happened within a short window of the killer's teammate dying.
 type TradeKill struct {
-	TraderIndex      int     `json:"traderIndex"`      // player who got the trade kill
-	TradedForIndex   int     `json:"tradedForIndex"`   // teammate who died
-	VictimIndex      int     `json:"victimIndex"`      // person the trader killed (also killed teammate)
-	TraderTimeSecs  float32 `json:"traderTimeSecs"`
-	TradedTimeSecs  float32 `json:"tradedTimeSecs"`
-	WindowSecs      float32 `json:"windowSecs"` // time between teammate death and trade kill
+	TraderIndex    int     `json:"traderIndex"`    // player who got the trade kill
+	TradedForIndex int     `json:"tradedForIndex"` // teammate who died
+	VictimIndex    int     `json:"victimIndex"`    // person the trader killed (also killed teammate)
+	TraderTimeSecs float32 `json:"traderTimeSecs"`
+	TradedTimeSecs float32 `json:"tradedTimeSecs"`
+	WindowSecs     float32 `json:"windowSecs"` // time between teammate death and trade kill
 }
 
 // ReinforceEvent is a wall reinforcement deploy with the deployer's position.
@@ -133,8 +133,8 @@ type BombPlantInfo struct {
 
 // BombSiteInfo classifies which bombsite the round was played on.
 type BombSiteInfo struct {
-	Floor       string  `json:"floor,omitempty"`        // "1F", "2F", "B", etc. (from spawn metadata)
-	Description string  `json:"description,omitempty"`  // human-readable site label
+	Floor       string  `json:"floor,omitempty"`       // "1F", "2F", "B", etc. (from spawn metadata)
+	Description string  `json:"description,omitempty"` // human-readable site label
 	CenterX     float32 `json:"centerX,omitempty"`
 	CenterY     float32 `json:"centerY,omitempty"`
 	CenterZ     float32 `json:"centerZ,omitempty"`
@@ -142,9 +142,9 @@ type BombSiteInfo struct {
 
 // RoundOutcome describes how the round ended.
 type RoundOutcome struct {
-	WinningTeam   int    `json:"winningTeam"`        // 0 or 1, -1 if unknown
+	WinningTeam   int    `json:"winningTeam"`           // 0 or 1, -1 if unknown
 	WinningRole   string `json:"winningRole,omitempty"` // "Attack" or "Defense"
-	WinCondition  string `json:"winCondition"`       // "KilledOpponents", "DefusedBomb", "DisabledDefuser", "Time", "PlantDetonation"
+	WinCondition  string `json:"winCondition"`          // "KilledOpponents", "DefusedBomb", "DisabledDefuser", "Time", "PlantDetonation"
 	AttackersDead int    `json:"attackersDead"`
 	DefendersDead int    `json:"defendersDead"`
 	Planted       bool   `json:"planted"`
@@ -213,21 +213,21 @@ type PlayerTrack struct {
 
 // EntityTrack is a non-player entity's position history with classification.
 type EntityTrack struct {
-	EntityID       uint32        `json:"entityId"`
-	EntityHex      string        `json:"entityHex"`
-	Type           string        `json:"type"` // "drone", "camera", "gadget", "projectile", "barricade", "weapon"
-	GadgetType     string        `json:"gadgetType,omitempty"`
-	SpawnGadgetName string       `json:"spawnGadgetName,omitempty"` // specific gadget identified from SPAWN hash at +60/+64 (e.g. "Mute Jammer", "Frost Welcome Mat")
-	SpawnHashA     uint32        `json:"spawnHashA,omitempty"`      // raw hashA at +60 from SPAWN archetype (PR #7) — useful for downstream classification when SpawnGadgetName isn't resolved
-	ProjectileType string        `json:"projectileType,omitempty"`
-	BarricadeType  string        `json:"barricadeType,omitempty"`
-	OwnerLabel     string        `json:"ownerLabel,omitempty"`
-	OwnerPlayerIdx *int          `json:"ownerPlayerIndex,omitempty"` // inferred owner for barricades / gadgets (nil if unknown — distinguishes "no owner" from playerIndex 0)
-	OwnerDistance  float32       `json:"ownerDistance,omitempty"`    // distance (m) from owner at spawn — confidence indicator
-	TeamIndex      int           `json:"teamIndex"`
-	SpawnCounter   uint32        `json:"spawnCounter,omitempty"`
-	HealthEvents   []HealthEvent `json:"healthEvents,omitempty"`
-	Frames         []PosFrame    `json:"frames"`
+	EntityID        uint32        `json:"entityId"`
+	EntityHex       string        `json:"entityHex"`
+	Type            string        `json:"type"` // "drone", "camera", "gadget", "projectile", "barricade", "weapon"
+	GadgetType      string        `json:"gadgetType,omitempty"`
+	SpawnGadgetName string        `json:"spawnGadgetName,omitempty"` // specific gadget identified from SPAWN hash at +60/+64 (e.g. "Mute Jammer", "Frost Welcome Mat")
+	SpawnHashA      uint32        `json:"spawnHashA,omitempty"`      // raw hashA at +60 from SPAWN archetype (PR #7) — useful for downstream classification when SpawnGadgetName isn't resolved
+	ProjectileType  string        `json:"projectileType,omitempty"`
+	BarricadeType   string        `json:"barricadeType,omitempty"`
+	OwnerLabel      string        `json:"ownerLabel,omitempty"`
+	OwnerPlayerIdx  *int          `json:"ownerPlayerIndex,omitempty"` // inferred owner for barricades / gadgets (nil if unknown — distinguishes "no owner" from playerIndex 0)
+	OwnerDistance   float32       `json:"ownerDistance,omitempty"`    // distance (m) from owner at spawn — confidence indicator
+	TeamIndex       int           `json:"teamIndex"`
+	SpawnCounter    uint32        `json:"spawnCounter,omitempty"`
+	HealthEvents    []HealthEvent `json:"healthEvents,omitempty"`
+	Frames          []PosFrame    `json:"frames"`
 }
 
 // ---------- Ammo & Weapons ----------
@@ -282,10 +282,10 @@ type PlayerWeapons struct {
 
 // LoadoutItem is one equipped item (weapon, gadget, operator).
 type LoadoutItem struct {
-	GameID    uint64 `json:"gameId"`
-	AuxHash   uint32 `json:"auxHash,omitempty"`
-	Name      string `json:"name"`
-	Category  int    `json:"category"` // 10=weapon, 3=gadget, 22/24=operator
+	GameID   uint64 `json:"gameId"`
+	AuxHash  uint32 `json:"auxHash,omitempty"`
+	Name     string `json:"name"`
+	Category int    `json:"category"` // 10=weapon, 3=gadget, 22/24=operator
 	// Real data from AmmoUpdates (populated post-analysis when available):
 	SlotType  string `json:"slotType,omitempty"`  // "primary", "secondary", "grenade", "op_gadget" — derived from Hash2
 	MaxCap    uint32 `json:"maxCap,omitempty"`    // observed max capacity from ammo updates
@@ -341,10 +341,10 @@ type HealthUpdate struct {
 	TimeSecs    float32 `json:"timeSecs,omitempty"`
 	BinOffset   int     `json:"binOffset"`
 	// Co-located health sub-properties (extracted from 256-byte window around the hp hash):
-	MaxHealth   float32 `json:"maxHealth,omitempty"`   // hash 0xC2D846F8
-	DamageRate  float32 `json:"damageRate,omitempty"`  // hash 0x475BB68B
-	HitCounter  float32 `json:"hitCounter,omitempty"`  // hash 0xF634093A — running damage taken
-	HealthTime  float32 `json:"healthTime,omitempty"`  // hash 0x848F67CF
+	MaxHealth  float32 `json:"maxHealth,omitempty"`  // hash 0xC2D846F8
+	DamageRate float32 `json:"damageRate,omitempty"` // hash 0x475BB68B
+	HitCounter float32 `json:"hitCounter,omitempty"` // hash 0xF634093A — running damage taken
+	HealthTime float32 `json:"healthTime,omitempty"` // hash 0x848F67CF
 }
 
 // HealthEvent is a health change for any entity (player, drone, gadget).
@@ -391,10 +391,10 @@ type BinaryMatchEvent struct {
 	KillEnum4      uint32 `json:"killEnum4,omitempty"`      // hash 0x3187B853 — DECODED: VictimTeam+1
 	KillEnum5      uint32 `json:"killEnum5,omitempty"`      // hash 0x0B64ADA5 — always 0 across 402 kills (reserved)
 	// Decoded fields (computed from raw enums + extra hashes):
-	AttackerTeam   int    `json:"attackerTeam,omitempty"`    // KillEnum3 - 1 (0=Def, 1=Atk in our data)
-	VictimTeam     int    `json:"victimTeam,omitempty"`      // KillEnum4 - 1
-	WeaponID       uint64 `json:"weaponId,omitempty"`        // hash 0x65DD6CF8 — session-variable ID of killing weapon
-	HeadshotByte   uint8  `json:"headshotByte,omitempty"`    // hash 0x4EA45BC3 — corroborating HS flag
+	AttackerTeam int    `json:"attackerTeam,omitempty"` // KillEnum3 - 1 (0=Def, 1=Atk in our data)
+	VictimTeam   int    `json:"victimTeam,omitempty"`   // KillEnum4 - 1
+	WeaponID     uint64 `json:"weaponId,omitempty"`     // hash 0x65DD6CF8 — session-variable ID of killing weapon
+	HeadshotByte uint8  `json:"headshotByte,omitempty"` // hash 0x4EA45BC3 — corroborating HS flag
 	// PR #5 — 4 new kill TLVs decoded from the sub-stream:
 	RoundTimeMs uint32  `json:"roundTimeMs,omitempty"` // hash 0x6C463718 — ms since round start
 	KillDamage  float32 `json:"killDamage,omitempty"`  // hash 0xC9527BDD — damage of killing bullet / max-health (0..1)
@@ -422,18 +422,18 @@ type LibraryCameraFrame struct {
 
 // LibraryShotEntry is a shot event reconstructed by the dissect library.
 type LibraryShotEntry struct {
-	PlayerIndex   int     `json:"playerIndex"`
-	X             float32 `json:"x"`
-	Y             float32 `json:"y"`
-	Z             float32 `json:"z"`
-	Yaw           float32 `json:"yaw"`
-	Pitch         float32 `json:"pitch"`
-	HeadQX        float32 `json:"hqX,omitempty"`
-	HeadQY        float32 `json:"hqY,omitempty"`
-	HeadQZ        float32 `json:"hqZ,omitempty"`
-	HeadQW        float32 `json:"hqW,omitempty"`
-	TimeSecs      float64 `json:"timeSecs"`
-	Seq           int     `json:"seq"`
+	PlayerIndex int     `json:"playerIndex"`
+	X           float32 `json:"x"`
+	Y           float32 `json:"y"`
+	Z           float32 `json:"z"`
+	Yaw         float32 `json:"yaw"`
+	Pitch       float32 `json:"pitch"`
+	HeadQX      float32 `json:"hqX,omitempty"`
+	HeadQY      float32 `json:"hqY,omitempty"`
+	HeadQZ      float32 `json:"hqZ,omitempty"`
+	HeadQW      float32 `json:"hqW,omitempty"`
+	TimeSecs    float64 `json:"timeSecs"`
+	Seq         int     `json:"seq"`
 }
 
 // LibraryAmmoUpdate is a raw ammo state update from the dissect library.
