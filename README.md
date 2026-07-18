@@ -116,8 +116,6 @@ r6-replay-tool -o analysis.json match-R01.rec
 r6-replay-tool -header match-R01.rec
 ```
 
-Because `-api` currently defaults to `:8080`, pass an empty API value when using the direct file-analysis mode. API mode takes precedence whenever the port value is non-empty.
-
 ### Command-Line Flags
 
 | Flag | Default | Description |
